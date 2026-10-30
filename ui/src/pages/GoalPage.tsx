@@ -7,6 +7,7 @@ import { AgentDetail } from '../components/AgentDetail.tsx';
 import { ErrorBoundary, Markdown, More, useConfirm } from '../components/common.tsx';
 import { MessageDialog } from '../components/Dialogs.tsx';
 import { AccountChips, harnessOf } from '../components/Accounts.tsx';
+import { AwayButton, AwayNote, useAway } from '../components/Away.tsx';
 import { Splitter } from '../components/Splitter.tsx';
 import { Story } from '../views/Story.tsx';
 import { Files } from '../views/Files.tsx';
@@ -116,6 +117,7 @@ export function GoalPage(p: Props) {
   const updates = inbox.filter(i => !ACTIONABLE.includes(i.kind));
   const agent = goal?.agents.find(a => a.name === p.agentName) ?? goal?.agents.find(a => a.name === goal.lead);
   const resolve = (item: string, decision: string, reply?: string) => void p.onCommand({ cmd: 'inbox.resolve', item, decision, reply });
+  const [away] = useAway(snapshot?.away, p.onCommand);
   const [gitSel, setGitSel] = useState<GitSel>();
   const openGit = (sel: GitSel) => {
     setGitSel(sel);
@@ -228,6 +230,7 @@ export function GoalPage(p: Props) {
         )}
 
         <section className="col center">
+          {away && !isRoom && goal.status === 'running' && <AwayNote compact />}
           <NeedsYou items={needs} onResolve={resolve} onSelectAgent={onAgent} />
           <nav className="tabs">
             {room.header && (
@@ -360,6 +363,7 @@ function GoalHeader({ goals, goal, events, snapshot, connected, onGoal, onComman
   }, [events]);
 
   const hasOutcome = goal.status !== 'running' && !!lead?.doneNote;
+  const [away, setAway] = useAway(snapshot?.away, onCommand);
   const meta = (
     <div className="goal-meta">
       <span className={`pill ${goal.status}`}>{goal.status === 'running' ? 'running' : goal.status}</span>
@@ -396,6 +400,7 @@ function GoalHeader({ goals, goal, events, snapshot, connected, onGoal, onComman
         <div className="goal-actions">
           {live && (
             <>
+              {goal.kind !== 'room' && <AwayButton away={away} onSet={setAway} />}
               <button className="btn" onClick={() => setMessaging(true)} title="Message the lead, everyone, a role or one agent">
                 ✉ Message
               </button>

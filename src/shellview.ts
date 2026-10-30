@@ -1,8 +1,8 @@
 /**
  * How a shell command is shown to the gatekeeper and the human (DESIGN.md §10): Codex's
  * `/bin/bash -lc '…'` wrapper taken off, and, for the gatekeeper, the bodies of quoted
- * here-documents left out, since the shell writes them as is. Only ever a view: the checks and
- * the agent use the command as it came.
+ * here-documents that `cat` or `tee` write into a file left out, since the shell writes them as
+ * is. Only ever a view: the checks and the agent use the command as it came.
  */
 
 /** The script inside `bash -lc '<script>'` (or sh, zsh) when the command is only that; else the command. */
@@ -58,20 +58,32 @@ interface Heredoc {
   dash: boolean;
   /** <<'EOF', <<"EOF" or <<\EOF: the body is written as is. */
   quoted: boolean;
+  /** `cat` or `tee` writes it out: text, where for python or node it's the program. */
+  toFile: boolean;
+}
+
+/** `cat > f <<'EOF'`, `cat <<'EOF' > f`, `tee f <<'EOF'`: the command before the here-document, and the rest of its line. Not piped on. */
+function writesFile(before: string, after: string): boolean {
+  return /^\s*(?:\w+=\S*\s+)*(cat|tee)\b/.test(before) && !/\|/.test(after.replace(/\|\|/g, ''));
 }
 
 /**
- * The script with each quoted here-document's body replaced by a line saying how long it was,
- * as nothing in it runs. Unquoted ones keep their body: $( … ) and backticks in it do run.
- * Anything it can't follow (an unclosed quote, a missing end line) leaves the script whole.
+ * The script with the body of each quoted here-document that goes into a file replaced by a line
+ * saying how long it was, as nothing in it runs. Unquoted ones keep their body ($( … ) and
+ * backticks in it do run), and so do those fed to a program (`python3 - <<'PY'`): that's the
+ * script the gatekeeper has to judge. Anything it can't follow (an unclosed quote, a missing end
+ * line) leaves the script whole.
  */
 export function elideHeredocs(script: string): string {
   const n = script.length;
   let out = '';
   let pending: Heredoc[] = [];
+  /** Where the command being read starts. */
+  let start = 0;
   let i = 0;
   while (i < n) {
     const c = script[i];
+    if (';|('.includes(c) || (c === '&' && script[i - 1] !== '>' && script[i + 1] !== '>')) start = i + 1;
     if (c === "'" || c === '"') {
       let j = i + 1;
       for (; j < n && script[j] !== c; j++) if (c === '"' && script[j] === '\\') j++;
@@ -92,12 +104,15 @@ export function elideHeredocs(script: string): string {
     } else if (c === '<' && script[i + 1] === '<') {
       const m = /^<<(-?)[ \t]*(?:'([^'\n]+)'|"([^"\n]+)"|\\(\w+)|(\w+))/.exec(script.slice(i));
       if (!m) return script;
-      pending.push({ dash: m[1] === '-', word: m[2] ?? m[3] ?? m[4] ?? m[5], quoted: m[5] === undefined });
+      const eol = script.indexOf('\n', i) < 0 ? n : script.indexOf('\n', i);
+      const toFile = writesFile(script.slice(start, i), script.slice(i + m[0].length, eol));
+      pending.push({ dash: m[1] === '-', word: m[2] ?? m[3] ?? m[4] ?? m[5], quoted: m[5] === undefined, toFile });
       out += m[0];
       i += m[0].length;
     } else if (c === '\n' && pending.length) {
       out += '\n';
       i++;
+      start = i;
       for (const h of pending) {
         const body: string[] = [];
         for (;;) {
@@ -106,7 +121,7 @@ export function elideHeredocs(script: string): string {
           const line = script.slice(i, end);
           i = end + 1;
           if ((h.dash ? line.replace(/^\t+/, '') : line) === h.word) {
-            out += h.quoted ? `[${body.length} line${body.length === 1 ? '' : 's'} of text, written as is: nothing in ${body.length === 1 ? 'it' : 'them'} runs]\n` : body.map(l => `${l}\n`).join('');
+            out += h.quoted && h.toFile ? `[${body.length} line${body.length === 1 ? '' : 's'} of text, written out as is: nothing in ${body.length === 1 ? 'it' : 'them'} runs]\n` : body.map(l => `${l}\n`).join('');
             out += line + (end < n ? '\n' : '');
             break;
           }
@@ -115,6 +130,7 @@ export function elideHeredocs(script: string): string {
       }
       pending = [];
     } else {
+      if (c === '\n') start = i + 1;
       out += c;
       i++;
     }

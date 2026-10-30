@@ -1,7 +1,7 @@
 # Tracker
 
 Where MetaHarness stands against the plan in [DESIGN.md §19](DESIGN.md). Update this file when a
-step lands. Last updated 2026-10-24.
+step lands. Last updated 2026-10-30.
 
 ## Milestone 0: a small team works ✅
 
@@ -562,6 +562,23 @@ Findings from the run:
   writes and network as before; the `sandbox` parameter overrides a profile, so it's left out),
   Claude haiku (a `cat` and a Read outside both come to the Inbox). Not yet: Antigravity live,
   Windows paths, a phone client.
+- [x] **Away, and approvals left to the team** (DESIGN.md §10, discussed and agreed on
+  2026-10-30). The event log showed 321 of 323 approvals that reached the human approved, and
+  friends approving every command unread. New approval mode `allow`: what stays in the project
+  runs; what names a path outside it (`pathsOutside` now follows commands that write:
+  redirection targets, here-documents skipped, subshells) or runs as `sudo` goes to the
+  gatekeeper, and its ASK to the lead as a second eye (`send` with `allow: yes|no`; to the
+  human if the lead is silent for `stallMinutes`). A separate **away** switch (`mh away` /
+  `mh back`, a button on Home, `presence.json`): approvals go to the gatekeeper and lead
+  whatever the mode, waiting ones are refused so they're asked again, `send` to the human
+  returns at once, and the new `away` rule moment delivers the default `away` rule to leads
+  (decide, self-approve designs within the goal, log in `shared/decisions.md`, park the rest).
+  Gatekeeper fixes from the same log: only text `cat`/`tee` write out is hidden from it
+  (`python3 - <<'PY'` bodies are shown now), Antigravity's tool definitions and conversation
+  folder are the agent's places (`ownDirs`), and its prompt says it judges safety, not scope.
+  Teammates asking the human while away are told to ask the lead instead (`message.held`). The
+  switch is in the goal header and on Home; checked with tests (163) and in headless Chrome
+  against a scripted daemon. Not yet run live.
 - [ ] The assistant stepping into goals (messaging the lead, pausing): later
 - [ ] Your own runs with the UI (live harnesses); fix what they turn up
 - [ ] Build order 3 (Milestone 3): shared-folder history browser, replay, search
@@ -585,7 +602,7 @@ Findings from the run:
 ## Resuming work
 
 ```sh
-npm install && npm test        # 155 tests, about half a minute, no model calls
+npm install && npm test        # 163 tests, about half a minute, no model calls
 node src/cli.ts doctor         # what's installed and signed in here
 node src/cli.ts daemon --fake  # try it without spending anything
 ```

@@ -87,6 +87,12 @@ export class AgyAdapter implements HarnessAdapter {
     return `${this.bin} --conversation ${sessionId}`;
   }
 
+  /** The MCP tools' definitions agy has its agents read, and the conversation's own folder (saved tool output, scratch). */
+  ownDirs(sessionId: string): string[] {
+    const cli = join(this.isolate ? join(this.isolate, 'home') : this.userHome, '.gemini', 'antigravity-cli');
+    return [join(cli, 'mcp'), ...(sessionId ? [join(cli, 'brain', sessionId)] : [])];
+  }
+
   async start(spec: SessionSpec, events: SessionEvents, opts: StartOptions = {}): Promise<Session> {
     if (!spec.mcpUrl || !spec.hookUrl) throw new Error('the daemon has no address for MCP and hooks yet (is the server running?)');
     writeAgentConfig(spec, this.hookScript, undefined, this.userHome);

@@ -5,13 +5,14 @@ import type { ToolRequest } from './adapters/types.ts';
 
 /**
  * Rules (design §18): short notes MetaHarness hands an agent at a moment it can see: the start
- * of a session, a tool call that names a path, a new file, a commit, a call to done. Each is a
+ * of a session, a tool call that names a path, a new file, a commit, a call to done, the human
+ * going away. Each is a
  * markdown file in rules/; this module reads them and decides which ones fire. The daemon only
  * delivers what comes out.
  */
 
-export type RuleWhen = 'start' | 'path' | 'new-file' | 'commit' | 'done';
-export const RULE_WHENS: RuleWhen[] = ['start', 'path', 'new-file', 'commit', 'done'];
+export type RuleWhen = 'start' | 'path' | 'new-file' | 'commit' | 'done' | 'away';
+export const RULE_WHENS: RuleWhen[] = ['start', 'path', 'new-file', 'commit', 'done', 'away'];
 
 export type ChangeKind = 'added' | 'modified' | 'deleted' | 'renamed';
 const CHANGE_KINDS: ChangeKind[] = ['added', 'modified', 'deleted', 'renamed'];
@@ -342,19 +343,21 @@ const TRIGGER: Record<Exclude<RuleWhen, 'start'>, string> = {
   'new-file': 'when you create a file',
   commit: 'when you commit',
   done: 'when you call done',
+  away: 'when the human goes away',
 };
 
 /**
- * The Rules part of an agent's prompt: the start rules in full, and a line for each of the
- * others so the agent knows their notes will come. Empty when no rule is for this agent.
+ * The Rules part of an agent's prompt: the start rules in full (and the away rules, while the
+ * human is away), and a line for each of the others so the agent knows their notes will come.
+ * Empty when no rule is for this agent.
  */
-export function rulesPrompt(rules: Iterable<Rule>, a: RuleAgent, cwd: string): string {
+export function rulesPrompt(rules: Iterable<Rule>, a: RuleAgent, cwd: string, away = false): string {
   const mine = [...rules].filter(r => !r.off && appliesTo(r, a) && holds(r, cwd));
-  const start = mine.filter(r => r.when === 'start');
-  const later = mine.filter(r => r.when !== 'start');
+  const start = mine.filter(r => r.when === 'start' || (away && r.when === 'away'));
+  const later = mine.filter(r => !start.includes(r));
   if (!start.length && !later.length) return '';
   const parts = ['## Rules'];
-  for (const r of start) parts.push(`### ${r.name}\n\n${withInclude(r, cwd)}`);
+  for (const r of start) parts.push(`### ${r.name}${r.when === 'away' ? ' (the human is away now)' : ''}\n\n${withInclude(r, cwd)}`);
   if (later.length) {
     const lines = later.map(r => {
       const where = r.paths.join(', ') === '**' ? '' : ` (${r.paths.join(', ')})`;
@@ -461,6 +464,13 @@ export function onCommit(rules: Iterable<Rule>, a: RuleAgent, cwd: string, st: R
     out.push({ rule: r.name, when: r.when, paths: hits.map(f => f.path), text: `${head(r)} Your commit ${sha.slice(0, 7)} ${shown.join(', ')}.\n${withInclude(r, cwd)}` });
   }
   return out;
+}
+
+/** The human went away: the away rules for this agent, as one note. */
+export function onAway(rules: Iterable<Rule>, a: RuleAgent, cwd: string): RuleNote | undefined {
+  const due = [...rules].filter(r => !r.off && r.when === 'away' && appliesTo(r, a) && holds(r, cwd));
+  if (!due.length) return undefined;
+  return { rule: due.map(r => r.name).join(', '), when: 'away', paths: [], text: due.map(r => `${head(r)} The human is away now.\n${withInclude(r, cwd)}`).join('\n\n') };
 }
 
 /**

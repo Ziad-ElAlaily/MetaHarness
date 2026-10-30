@@ -9,6 +9,7 @@ const WHEN: { id: RuleWhen; label: string; hint: string }[] = [
   { id: 'new-file', label: 'Creating a file', hint: 'When the agent writes a file that didn’t exist. Once per session.' },
   { id: 'commit', label: 'Committing', hint: 'When a commit of the agent’s (not a merge) changes matching files.' },
   { id: 'done', label: 'Calling done', hint: 'The first done comes back with this text; the next one goes through.' },
+  { id: 'away', label: 'You go away', hint: 'When you say you’re away, to the agents at work then; in the prompt of those that start while you are.' },
 ];
 const CHANGES: ChangeKind[] = ['added', 'modified', 'deleted', 'renamed'];
 

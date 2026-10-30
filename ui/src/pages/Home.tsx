@@ -5,6 +5,7 @@ import { ACTIONABLE, NeedsYou } from '../components/Inbox.tsx';
 import { NewGoalForm } from '../components/Dialogs.tsx';
 import { Markdown, More } from '../components/common.tsx';
 import { AccountList, useOverview } from '../components/Accounts.tsx';
+import { AwayButton, AwayNote, useAway } from '../components/Away.tsx';
 
 interface Props {
   goals: GoalSummary[];
@@ -34,6 +35,7 @@ export function Home({ goals, rooms, loaded, config, onOpen, onOpenRoom, onNewRo
   const past = goals.filter(g => g.status !== 'running' && (elsewhere || here(g)) && (!query || `${g.request} ${g.result ?? ''} ${g.dir}`.toLowerCase().includes(query.toLowerCase())));
   const shown = showAll || query ? past : past.slice(0, 8);
   const needs = (overview?.inbox ?? []).filter(i => ACTIONABLE.includes(i.kind));
+  const [away, setAway] = useAway(overview?.away, onCommand);
   const label = (id: string) => firstLine(goals.find(g => g.id === id)?.request).slice(0, 40) || id;
   const roles = config?.roles.length ?? 0;
 
@@ -49,7 +51,10 @@ export function Home({ goals, rooms, loaded, config, onOpen, onOpenRoom, onNewRo
             </div>
           )}
         </div>
+        {overview && <AwayButton away={away} onSet={setAway} className="btn small" />}
       </div>
+
+      {away && <AwayNote />}
 
       <NeedsYou
         items={needs}

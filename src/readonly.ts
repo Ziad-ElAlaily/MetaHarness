@@ -28,6 +28,9 @@ const DANGEROUS_VARS = /^(PATH|LD_\w+|DYLD_\w+|GIT_\w+|\w*PAGER|BASH_ENV|ENV|PRO
 
 type Tok = { op: string } | { word: string };
 
+/** Marks a word lex read as a redirection's target (with `writes`): a path, whatever the command. */
+const TARGET = '\0';
+
 /**
  * Where a $( … ) starting at `i` (pointing at "$(") ends, honouring quotes and nesting; -1 if
  * it doesn't.
@@ -49,8 +52,11 @@ function closeParen(src: string, i: number): number {
 /**
  * Splits a command line into words and operators. Returns a reason instead when it can't be
  * sure. A command substitution is fine when what it runs is read-only too (`inner` checks it).
+ * With `writes`, commands that write are followed too, for the paths they name: a redirection's
+ * target becomes a word, here-document bodies are skipped, and background jobs and subshells
+ * only separate commands.
  */
-function lex(src: string, inner: (cmd: string) => Verdict): Tok[] | string {
+function lex(src: string, inner: (cmd: string) => Verdict, writes = false): Tok[] | string {
   // $(( … )) is arithmetic, and $( … ) / ` … ` run a command: check it, then treat it as a word.
   const substitution = (j: number): { end: number } | string => {
     if (src[j] === '`') {
@@ -71,11 +77,17 @@ function lex(src: string, inner: (cmd: string) => Verdict): Tok[] | string {
   const out: Tok[] = [];
   let word = '';
   let inWord = false;
+  let target = false;
   const push = () => {
-    if (inWord) out.push({ word });
+    if (inWord) {
+      out.push({ word: target ? TARGET + word : word });
+      target = false;
+    }
     word = '';
     inWord = false;
   };
+  /** Here-documents whose bodies start after this line. */
+  let heredocs: { word: string; dash: boolean }[] = [];
   for (let i = 0; i < src.length; i++) {
     const c = src[i];
     const next = src[i + 1];
@@ -120,6 +132,49 @@ function lex(src: string, inner: (cmd: string) => Verdict): Tok[] | string {
     } else if (c === '\n' || c === ';') {
       push();
       out.push({ op: ';' });
+      if (c === '\n' && heredocs.length) {
+        // Their bodies are text, not commands: on to the line after the last one's end.
+        for (const h of heredocs) {
+          for (;;) {
+            if (i + 1 >= src.length) return out;
+            const end = src.indexOf('\n', i + 1) < 0 ? src.length : src.indexOf('\n', i + 1);
+            const line = src.slice(i + 1, end);
+            i = end;
+            if ((h.dash ? line.replace(/^\t+/, '') : line) === h.word) break;
+          }
+        }
+        heredocs = [];
+      }
+    } else if (writes && (c === '>' || (c === '&' && next === '>'))) {
+      // Its target is the next word, a path like any other.
+      if (inWord && /^\d$/.test(word)) {
+        word = '';
+        inWord = false;
+      } else push();
+      let j = c === '&' ? i + 2 : i + 1;
+      if (src[j] === '>' || src[j] === '|') j++;
+      // >&2 and >&- name a descriptor, not a file.
+      if (src[j] === '&') for (j++; /[\d-]/.test(src[j] ?? ''); ) j++;
+      else target = true;
+      i = j - 1;
+    } else if (writes && (c === '(' || c === ')' || (c === '&' && next !== '&'))) {
+      push();
+      out.push({ op: ';' });
+    } else if (writes && c === '<' && next === '<' && src[i + 2] !== '<') {
+      push();
+      const m = /^<<(-?)[ \t]*(?:'([^'\n]+)'|"([^"\n]+)"|\\?([^\s;|&<>()]+))/.exec(src.slice(i));
+      if (!m) return 'a here-document without an end word';
+      heredocs.push({ dash: m[1] === '-', word: m[2] ?? m[3] ?? m[4] });
+      i += m[0].length - 1;
+    } else if (writes && c === '<') {
+      // An input file or a here-string, a word like any other; <( … ) runs a command.
+      push();
+      if (next === '<') i += 2;
+      else if (next === '(') {
+        const end = closeParen(src, i);
+        if (end < 0) return 'an unclosed process substitution';
+        i = end;
+      }
     } else if (c === '|' || c === '&') {
       push();
       if (next === c) {
@@ -159,7 +214,7 @@ function lex(src: string, inner: (cmd: string) => Verdict): Tok[] | string {
     }
   }
   push();
-  return out;
+  return heredocs.length ? 'a here-document without its end line' : out;
 }
 
 export function readOnlyCommand(command: string, depth = 0): Verdict {
@@ -320,13 +375,15 @@ function absolute(word: string, cwd: string, home: string): string | undefined {
 }
 
 /**
- * What a read-only command reads outside the places it may (design §22): the paths it names that
- * resolve elsewhere, following its `cd`s. Errs towards naming one: a path it can't resolve (a
- * variable, ~user) counts. Patterns and scripts (grep's, sed's, jq's) aren't paths.
+ * What a command reaches outside the places it may (design §22): the paths it names that resolve
+ * elsewhere, following its `cd`s, and running as another user (sudo). Errs towards naming one: a
+ * path it can't resolve (a variable, ~user) counts. Patterns and scripts (grep's, sed's, jq's)
+ * aren't paths. `writes`: the command may write (redirections, here-documents), not only read.
+ * What it can't follow names nothing: a script fed to python reaches wherever it reaches.
  */
-export function pathsOutside(command: string, cwd: string, inside: (path: string) => boolean, home: string, depth = 0): string[] {
+export function pathsOutside(command: string, cwd: string, inside: (path: string) => boolean, home: string, writes = false, depth = 0): string[] {
   if (depth > 3) return [command];
-  const toks = lex(command, () => YES);
+  const toks = lex(command, () => YES, writes);
   if (typeof toks === 'string') return [];
   const segments: string[][] = [[]];
   for (const t of toks) {
@@ -336,11 +393,19 @@ export function pathsOutside(command: string, cwd: string, inside: (path: string
   const out: string[] = [];
   let here = cwd;
   for (const seg of segments) {
-    let w = seg.filter(x => !['do', 'then', 'else', 'done', 'fi', '!', '{', '}', 'if', 'elif', 'while', 'until'].includes(x));
+    for (const t of seg.filter(x => x.startsWith(TARGET)).map(x => x.slice(1))) {
+      const p = absolute(t, here, home);
+      if (!p || !(inside(p) || /^\/dev\/(null|stdout|stderr|tty|fd\/\d+)$/.test(p))) out.push(t);
+    }
+    let w = seg.filter(x => !x.startsWith(TARGET) && !['do', 'then', 'else', 'done', 'fi', '!', '{', '}', 'if', 'elif', 'while', 'until'].includes(x));
     while (w.length && /^[A-Za-z_]\w*=/.test(w[0])) w = w.slice(1);
     if (!w.length) continue;
     const cmd = w[0].slice(w[0].lastIndexOf('/') + 1);
     const args = w.slice(1);
+    if (['sudo', 'su', 'doas', 'pkexec'].includes(cmd)) {
+      out.push(cmd);
+      continue;
+    }
     if (cmd === 'cd' || cmd === 'pushd') {
       const to = args.find(a => !a.startsWith('-'));
       const p = to === undefined ? home : absolute(to, here, home);
@@ -357,7 +422,7 @@ export function pathsOutside(command: string, cwd: string, inside: (path: string
     }
     if (['bash', 'sh', 'zsh'].includes(cmd)) {
       const c = args.findIndex(a => /^-[a-z]*c[a-z]*$/.test(a));
-      if (c >= 0 && args[c + 1] !== undefined) out.push(...pathsOutside(args[c + 1], here, inside, home, depth + 1));
+      if (c >= 0 && args[c + 1] !== undefined) out.push(...pathsOutside(args[c + 1], here, inside, home, writes, depth + 1));
       continue;
     }
     const skip = patternArgs(cmd, args);

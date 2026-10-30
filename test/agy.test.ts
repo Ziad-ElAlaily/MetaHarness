@@ -207,3 +207,9 @@ test("agy: a role's server MetaHarness doesn't define comes from the user's own 
   assert.deepEqual(mcpServers.blender, { command: 'blender-mcp', env: { HOME: user, PORT: '9' } }, 'a server agy starts gets the real HOME');
   assert.deepEqual(mcpServers.docs, { serverUrl: 'http://d/mcp' });
 });
+
+test("an agent's own Antigravity folders, the tool definitions and its conversation's, count as its places", () => {
+  const a = new AgyAdapter({ isolate: '/mh/homes/antigravity', userHome: '/home/me' });
+  assert.deepEqual(a.ownDirs('c1'), ['/mh/homes/antigravity/home/.gemini/antigravity-cli/mcp', '/mh/homes/antigravity/home/.gemini/antigravity-cli/brain/c1']);
+  assert.deepEqual(new AgyAdapter({ userHome: '/home/me' }).ownDirs(''), ['/home/me/.gemini/antigravity-cli/mcp']);
+});

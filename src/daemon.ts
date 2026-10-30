@@ -29,7 +29,7 @@ import { loadProfiles } from './harnesses.ts';
 import { endTagged, settle, tagged, type Tagged } from './procs.ts';
 import { foldEfforts, splitEffort, type EffortVariant } from './effort.ts';
 import { browse, folderSetup, forget, loadRegistry, nesting, Project, projectId, realDir, remember, within } from './projects.ts';
-import { matchesPaths, onCommit, onDone, onToolCall, rulesPrompt, RuleState, toolPaths, type Rule, type RuleAgent, type RuleNote, type ToolInfo } from './rules.ts';
+import { matchesPaths, onAway, onCommit, onDone, onToolCall, rulesPrompt, RuleState, toolPaths, type Rule, type RuleAgent, type RuleNote, type ToolInfo } from './rules.ts';
 import { claimedSkills, skillsFor, skillsPrompt, withSkills, type Skill } from './skills.ts';
 import {
   applyCanvas, branchCards, canvasMarkdown, castText, DEFAULT_MAKERS, demoPage, leadMethodology, lensLines, lensMethodology, lensName, makesOf, mixAsk, modelRole, parseCanvasOps, RESPONSIBILITIES,
@@ -407,6 +407,13 @@ export class Daemon {
   private adapters: Record<string, HarnessAdapter>;
   private tokens = new Map<string, { goal: string; agent: string }>();
   private approvals = new Map<string, (d: ApprovalDecision) => void>();
+  /** Teammates' requests their lead was asked about (askLead), oldest first. */
+  private leadAsks = new Map<AgentRec, { id: string; settle: (d: ApprovalDecision) => void }[]>();
+  /**
+   * The human said they're away (design §10): nothing waits on them. Approvals go to the
+   * gatekeeper and the lead, questions wait in the Inbox, and the away rules reach the agents.
+   */
+  away = false;
   private harnessOverride?: string;
   private pollMs: number;
   private pollTimer?: NodeJS.Timeout;
@@ -452,6 +459,7 @@ export class Daemon {
     this.straysMs = o.straysMs ?? 6000;
     this.closeGraceMs = o.closeGraceMs ?? 3000;
     this.landedQuietMs = o.landedQuietMs ?? 60_000;
+    this.away = readAway(o.home);
     if (o.repo) this.defaultProject = this.loadProject(realDir(o.repo), o.configDirs);
     let assistantRoute = { harness: '', model: '' };
     let assistantSpent = 0;
@@ -966,7 +974,7 @@ export class Daemon {
       const list = [...g.project.config.workflows.values()].map(w => `- ${w.name}: ${w.goodAt || '—'}`).join('\n');
       parts.push(`## Workflows\n\nGuides for running kinds of tasks. If one fits this goal, read it with the \`workflow\` tool and follow it.\n\n${list}`);
     }
-    const rules = rulesPrompt(this.agentRules(rec), ruleAgent(rec), rec.cwd);
+    const rules = rulesPrompt(this.agentRules(rec), ruleAgent(rec), rec.cwd, this.away && !g.room);
     if (rules) parts.push(rules);
     const skills = skillsPrompt(this.skillsFor(rec));
     if (skills) parts.push(skills);
@@ -977,6 +985,7 @@ export class Daemon {
         `- Your name: ${rec.name}`,
         inRoom ? `- Room: ${g.request}` : `- Goal: ${g.request}`,
         `- Spawned by: ${rec.parent === 'human' ? 'the human' : rec.parent}`,
+        ...(this.away && !inRoom ? [rec.isLead ? "- The human is away: they'll answer when they're back. Don't wait for them." : `- The human is away: ask ${g.lead} (your lead) instead of them.`] : []),
         `- Shared folder: ${g.sharedDir}`,
         `- Working directory: ${rec.cwd}`,
         ...this.gitLines(g, rec, startedFrom),
@@ -1187,7 +1196,8 @@ export class Daemon {
   /**
    * Where an agent may read and work without asking (design §22): its project's folder, its own
    * folder (a worktree), its goal's folder in MetaHarness's home (the shared folder, teammates'
-   * worktrees) and the temporary folder. Never another project, or the rest of the machine.
+   * worktrees), the temporary folder, and the folders its harness keeps for its session (ownDirs).
+   * Never another project, or the rest of the machine.
    */
   private agentRoots(rec: AgentRec): string[] {
     const g = this.goals.get(rec.goal)!;
@@ -1198,7 +1208,8 @@ export class Daemon {
         return normalize(p);
       }
     };
-    return [...new Set([g.dir, rec.cwd, join(this.home, 'goals', g.id), tmpdir()].flatMap(p => [normalize(p), real(p)]))];
+    const own = rec.adapter.ownDirs?.(rec.session?.nativeId ?? '') ?? [];
+    return [...new Set([g.dir, rec.cwd, join(this.home, 'goals', g.id), tmpdir(), ...own].flatMap(p => [normalize(p), real(p)]))];
   }
 
   /** Whether a path (relative to the agent's folder) is in one of its places. Symlinks count where they lead. */
@@ -1223,8 +1234,10 @@ export class Daemon {
   }
 
   /**
-   * A permission request the rules didn't settle: the gatekeeper's verdict where the approval
-   * mode has one, else (or when it says ASK) the human's, from the Inbox.
+   * A permission request the rules didn't settle. In allow mode, what stays in the project runs.
+   * The rest goes to the gatekeeper where the approval mode has one (always, while the human is
+   * away), and what it won't settle to the human, or to the lead when approvals are left to the
+   * team (allow mode, or the human away).
    */
   async requestApproval(rec: AgentRec, tool: string, detail: string, outside?: string[]): Promise<ApprovalDecision> {
     const refused = tool === 'Bash' ? refusedGitCommand(detail, { sharedCheckout: this.sharedCheckout(rec) }) : undefined;
@@ -1243,9 +1256,16 @@ export class Daemon {
       outside = away;
     }
     const g = this.goals.get(rec.goal)!;
-    const away = outside?.length ? ` It reaches outside the project (${g.dir}): ${outside.slice(0, 5).join(', ')}.` : '';
     // What the gatekeeper and the human read: the script without Codex's `bash -lc '…'` around it.
     const shown = tool === 'Bash' ? unwrapShell(detail) : detail;
+    if (this.approvalMode(rec) === 'allow') {
+      if (tool === 'Bash') outside = [...new Set([...(outside ?? []), ...pathsOutside(shown, rec.cwd, p => this.inProject(rec, p), homedir(), true)])];
+      if (!outside?.length) {
+        this.emit({ goal: rec.goal, agent: rec.name, type: 'approval.auto', data: { tool, detail: detail.slice(0, 2000), why: 'allow' } });
+        return { allow: true };
+      }
+    }
+    const away = outside?.length ? ` It reaches outside the project (${g.dir}): ${outside.slice(0, 5).join(', ')}.` : '';
     let note: string | undefined;
     if (this.usesGatekeeper(rec)) {
       const seen = tool === 'Bash' ? elideHeredocs(shown) : shown;
@@ -1255,14 +1275,28 @@ export class Daemon {
       });
       this.emit({ goal: rec.goal, agent: rec.name, type: 'approval.gatekeeper', data: { tool, detail: seen.slice(0, 2000), verdict: j.verdict, reason: j.reason, ...(j.remembered ? { remembered: true } : {}) } });
       if (j.verdict === 'allow') return { allow: true };
-      if (j.verdict === 'deny') return { allow: false, message: `The gatekeeper refused this: ${j.reason} If it's really needed, ask the human (send, to: human) and say why.` };
+      if (j.verdict === 'deny') return { allow: false, message: `The gatekeeper refused this: ${j.reason} If it's really needed, ask ${this.away ? 'your lead' : 'the human (send, to: human)'} and say why.` };
       note = `Gatekeeper: ${j.reason}`;
     }
     if (away) note = [note, away.trim()].filter(Boolean).join(' ');
+    const lead = g.agents.get(g.lead);
+    if ((this.away || this.approvalMode(rec) === 'allow') && !g.room && lead && lead !== rec && !FINISHED.includes(lead.state) && lead.doneNote === undefined) {
+      return this.askLead(rec, lead, tool, shown, note);
+    }
+    return this.askHuman(rec, tool, shown, note);
+  }
+
+  /** An approval for the human, in the Inbox; while they're away, refused, as nobody else can give it. */
+  private askHuman(rec: AgentRec, tool: string, shown: string, note?: string): Promise<ApprovalDecision> {
+    if (this.away) {
+      const why = `The human is away, and nobody else can approve this. Find a way that stays in the project, or leave it for them: say what you needed and why${rec.isLead ? ' in shared/decisions.md' : ' to your lead'}.`;
+      this.emit({ goal: rec.goal, agent: rec.name, type: 'approval.refused', data: { tool, detail: shown.slice(0, 2000), why } });
+      return Promise.resolve({ allow: false, message: why });
+    }
     rec.pendingApprovals++;
     return new Promise(resolve => {
       this.toHuman(
-        g, rec.name, 'approval', `${tool}: ${shown}`,
+        this.goals.get(rec.goal)!, rec.name, 'approval', `${tool}: ${shown}`,
         item =>
           this.approvals.set(item.id, d => {
             rec.pendingApprovals--;
@@ -1273,6 +1307,107 @@ export class Daemon {
     });
   }
 
+  /**
+   * The lead as a second eye on a teammate's request: it answers with send (to: the agent,
+   * allow: yes or no). No answer within the stall time: the human decides, or, while they're
+   * away, it's refused.
+   */
+  private askLead(rec: AgentRec, lead: AgentRec, tool: string, shown: string, note?: string): Promise<ApprovalDecision> {
+    const id = randomUUID().slice(0, 8);
+    const minutes = this.cfg(rec).settings.stallMinutes || 10;
+    rec.pendingApprovals++;
+    return new Promise(resolve => {
+      const asks = this.leadAsks.get(rec) ?? [];
+      this.leadAsks.set(rec, asks);
+      /** Takes it off the lead's list; false when it was answered already. */
+      const drop = (): boolean => {
+        const i = asks.indexOf(ask);
+        if (i < 0) return false;
+        asks.splice(i, 1);
+        if (!asks.length) this.leadAsks.delete(rec);
+        clearTimeout(timer);
+        rec.pendingApprovals--;
+        return true;
+      };
+      const ask = { id, settle: (d: ApprovalDecision) => drop() && resolve(d) };
+      const timer = setTimeout(() => {
+        if (!drop()) return;
+        this.emit({ goal: rec.goal, agent: rec.name, type: 'approval.lead_silent', data: { id, lead: lead.name, minutes } });
+        void this.askHuman(rec, tool, shown, [note, `${lead.name} (the lead) didn't answer within ${minutes} minutes.`].filter(Boolean).join(' ')).then(resolve);
+      }, minutes * 60_000);
+      timer.unref?.();
+      asks.push(ask);
+      this.emit({ goal: rec.goal, agent: rec.name, type: 'approval.lead', data: { id, lead: lead.name, tool, detail: shown.slice(0, 2000), ...(note ? { note } : {}) } });
+      this.notice(
+        lead,
+        `${rec.name} asks to run ${tool}:\n${shown.slice(0, 3000)}${shown.length > 3000 ? `\n[… ${shown.length - 3000} more characters]` : ''}\n${note ? `${note}\n` : ''}` +
+          `${this.away ? 'The human is away' : 'The human left approvals to the team'}, so you're the second eye on what reaches outside the project. ` +
+          `Answer with send (to: ${rec.name}, allow: yes or no, text: why); it waits until you do. Allow what the goal needs, refuse the rest.`,
+      );
+    });
+  }
+
+  /**
+   * The human going away or coming back (design §10). Away: approvals waiting on them are
+   * refused (asked again, they go to the lead), agents with a question waiting are told not to
+   * wait, and the away rules reach the agents they're for. Back: the leads hear it.
+   */
+  setAway(away: boolean): string {
+    if (away === this.away) return away ? "You're already away." : "You're already here.";
+    this.away = away;
+    writeFileSync(join(this.home, 'presence.json'), JSON.stringify({ away, since: new Date().toISOString() }) + '\n');
+    if (away) {
+      for (const item of this.humanInbox.filter(i => i.kind === 'approval' && this.approvals.has(i.id))) {
+        this.humanInbox.splice(this.humanInbox.indexOf(item), 1);
+        this.emit({ goal: item.goal, agent: item.agent, type: 'inbox.resolved', data: { id: item.id, decision: 'dismiss', reply: null, why: 'you went away' } });
+        const pending = this.approvals.get(item.id)!;
+        this.approvals.delete(item.id);
+        pending({ allow: false, message: "The human went away before answering. If you still need it, run it again: someone else decides now." });
+      }
+    }
+    for (const g of this.goals.values()) {
+      if (g.status === 'ended' || g.room) continue;
+      this.emit({ goal: g.id, type: away ? 'human.away' : 'human.back', data: {} });
+      for (const rec of g.agents.values()) {
+        if (rec.quick || FINISHED.includes(rec.state) || rec.doneNote !== undefined) continue;
+        if (!away) {
+          if (rec.isLead) this.ruleNote(rec, { rule: '', when: 'away', paths: [], text: '[MetaHarness] The human is back: questions and approvals reach them again.' });
+          continue;
+        }
+        const asked = this.humanInbox.filter(i => i.goal === g.id && i.agent === rec.name && (i.kind === 'question' || i.kind === 'decision'));
+        const n = onAway(this.agentRules(rec), ruleAgent(rec), rec.cwd);
+        const text = [
+          asked.length
+            ? `[MetaHarness] The human is away. What you asked them stays in their Inbox for when they're back; don't wait for the answer${this.awayLead(g, rec.name) ? `, ask ${g.lead} (your lead) instead` : ''}: ${asked.map(i => `"${i.text.replace(/\s+/g, ' ').slice(0, 120)}"`).join(', ')}.`
+            : '',
+          n?.text ?? '',
+        ].filter(Boolean).join('\n\n');
+        if (text) this.ruleNote(rec, { rule: n?.rule ?? '', when: 'away', paths: [], text });
+      }
+    }
+    return away ? "You're away: nothing waits on you, and the leads decide what they can." : 'Welcome back: questions and approvals reach you again.';
+  }
+
+  /** While the human is away, the lead a teammate asks instead of them; none for the lead itself, in a room, or once the lead has finished. */
+  private awayLead(g: GoalRec, from: string): AgentRec | undefined {
+    const lead = g.agents.get(g.lead);
+    if (!this.away || g.room || from === g.lead || !g.agents.has(from) || !lead || FINISHED.includes(lead.state) || lead.doneNote !== undefined) return undefined;
+    return lead;
+  }
+
+  /** The lead's answer to a teammate's request (send with allow): settles the oldest one waiting. */
+  answerApproval(rec: AgentRec, to: string, allow: boolean, text?: string): string {
+    const g = this.goals.get(rec.goal)!;
+    const target = [...g.agents.values()].find(a => a.name.toLowerCase() === to.trim().toLowerCase());
+    const ask = target && this.leadAsks.get(target)?.[0];
+    if (!target || !ask) return `${target ? target.name : `"${to}"`} isn't waiting on an approval from you.${text ? ' Send your text without allow to message them.' : ''}`;
+    if (rec.name !== g.lead) return `Only the lead (${g.lead}) answers ${target.name}'s request.`;
+    this.emit({ goal: rec.goal, agent: rec.name, type: 'approval.lead_answered', data: { id: ask.id, to: target.name, allow, ...(text ? { text } : {}) } });
+    ask.settle(allow ? { allow: true } : { allow: false, message: `${rec.name} (your lead) refused this${text ? `: ${text}` : '.'}` });
+    if (allow && text) this.enqueue(target, { id: randomUUID(), kind: 'message', from: rec.name, text, urgent: false, ts: new Date().toISOString() });
+    return `${allow ? 'Allowed' : 'Refused'} for ${target.name}.`;
+  }
+
   /** How this agent's approvals are decided: its role's setting, else the settings'. */
   approvalMode(rec: AgentRec): ApprovalMode {
     return rec.role.approvals ?? this.cfg(rec).settings.approvals;
@@ -1280,7 +1415,7 @@ export class Daemon {
 
   private usesGatekeeper(rec: AgentRec): boolean {
     const c = this.cfg(rec);
-    return this.approvalMode(rec) !== 'ask' && rec.role.name !== c.settings.gatekeeper && c.roles.has(c.settings.gatekeeper);
+    return (this.approvalMode(rec) !== 'ask' || this.away) && rec.role.name !== c.settings.gatekeeper && c.roles.has(c.settings.gatekeeper);
   }
 
   /** The config a goal's agents run with: its project's. */
@@ -1880,7 +2015,8 @@ export class Daemon {
       const live = going.filter(a => a.state !== 'idle' || going.some(c => c.parent === a.name));
       if (!live.length) continue;
       if (g.stall && live.some(a => a.progressAt > g.stall!.at)) g.stall = undefined;
-      const asking = new Set(this.humanInbox.filter(i => i.goal === g.id && ['approval', 'decision', 'question', 'stalled'].includes(i.kind)).map(i => i.agent));
+      // Waiting on the human is waiting on purpose, unless they're away.
+      const asking = new Set(this.away ? [] : this.humanInbox.filter(i => i.goal === g.id && ['approval', 'decision', 'question', 'stalled'].includes(i.kind)).map(i => i.agent));
       const isStuck = (a: AgentRec) =>
         (a.state === 'waiting' || a.state === 'idle') && !a.held && !a.pendingApprovals && !a.inbox.length && !asking.has(a.name) && now - a.progressAt >= ms;
       const stuck = new Set(live.filter(isStuck));
@@ -2113,7 +2249,7 @@ export class Daemon {
   /** In a turn, a rule's note joins it; between turns it waits for whatever reaches the agent next, so it never wakes anyone. */
   private ruleNote(rec: AgentRec, n: RuleNote): void {
     const skill = this.cfg(rec).rules.get(n.rule)?.skill;
-    this.emit({ goal: rec.goal, agent: rec.name, type: 'rule.fired', data: { rule: n.rule, when: n.when, paths: n.paths.slice(0, 20), ...(skill ? { skill } : {}) } });
+    if (n.rule) this.emit({ goal: rec.goal, agent: rec.name, type: 'rule.fired', data: { rule: n.rule, when: n.when, paths: n.paths.slice(0, 20), ...(skill ? { skill } : {}) } });
     if (rec.session?.busy() && !FINISHED.includes(rec.state)) this.notice(rec, n.text);
     else rec.ruleNotes.push(n.text);
   }
@@ -2225,8 +2361,17 @@ export class Daemon {
       if (r !== undefined) return r;
     }
     if (target === 'human' || target === 'you' || target === 'user') {
+      // While the human is away, a teammate asks its lead instead (design §10); the lead's own still reach the Inbox.
+      const askLead = this.awayLead(g, from);
+      if (askLead) {
+        this.emit({ goal: goalId, agent: from, type: 'message.held', data: { to: 'human', text, why: 'away', lead: askLead.name } });
+        return `The human is away, so this wasn't sent. Ask ${askLead.name} (your lead) instead: send to: lead. It decides what it can while they're away.`;
+      }
       this.emit({ goal: goalId, agent: from, type: 'message.sent', data: { to: 'human', text, urgent, ...(decision ? { decision } : {}) } });
       this.toHuman(g, from, decision ? 'decision' : 'question', text);
+      if (this.away && !g.room) {
+        return "The human is away: this waits in their Inbox for when they're back. Don't wait for the answer: decide what you can yourself, and note what you decided for them to review.";
+      }
       return decision
         ? 'Sent to the human for a decision. Their answer (approved, or what to change) will arrive as a message.'
         : 'Sent to the human. Their answer will arrive as a message.';
@@ -4072,6 +4217,7 @@ export class Daemon {
     return {
       goals,
       inbox,
+      away: this.away,
       // What a client offers when starting a goal or spawning an agent.
       roles: [...c.roles.values()].map(r => ({ name: r.name, harness: r.harness, model: r.model, goodAt: r.goodAt, helper: r.helper, worktree: r.worktree })),
       workflows: [...c.workflows.values()].map(w => ({ name: w.name, goodAt: w.goodAt })),
@@ -4144,9 +4290,9 @@ export class Daemon {
    * with. Only while it waits (or has an approval open).
    */
   private waitingOn(g: GoalRec, a: AgentRec): { who: string[]; why: 'approval' | 'question' | 'decision' | 'helpers' | 'partner' } | null {
-    if (a.pendingApprovals) return { who: ['human'], why: 'approval' };
+    if (a.pendingApprovals) return { who: [this.leadAsks.has(a) ? g.lead : 'human'], why: 'approval' };
     if (a.state !== 'waiting') return null;
-    const asked = this.humanInbox.find(i => i.goal === g.id && i.agent === a.name && (i.kind === 'question' || i.kind === 'decision'));
+    const asked = !this.away && this.humanInbox.find(i => i.goal === g.id && i.agent === a.name && (i.kind === 'question' || i.kind === 'decision'));
     if (asked) return { who: ['human'], why: asked.kind as 'question' | 'decision' };
     const kids = [...g.agents.values()].filter(c => c.parent === a.name && !FINISHED.includes(c.state) && c.doneNote === undefined).map(c => c.name);
     if (kids.length) return { who: kids, why: 'helpers' };
@@ -4408,6 +4554,9 @@ export class Daemon {
         if (!['approve', 'deny', 'dismiss'].includes(decision)) throw new Error('decision must be approve, deny or dismiss.');
         return { result: this.resolveInbox(item, decision as 'approve' | 'deny' | 'dismiss', s('reply')) };
       }
+      case 'presence.set':
+        if (typeof b.away !== 'boolean') throw new Error('presence.set needs "away": true or false.');
+        return { result: this.setAway(b.away), away: this.away };
       case 'goal.clean':
         return this.cleanGoals(s('goal'), b.force === true);
       case 'goal.procs':
@@ -5086,6 +5235,15 @@ function folderBytes(dir: string, seen = new Set<string>()): number {
 }
 
 /** How long ago, for messages: "just now", "3 min ago". */
+/** Whether the human said they're away, kept across restarts in presence.json. */
+function readAway(home: string): boolean {
+  try {
+    return JSON.parse(readFileSync(join(home, 'presence.json'), 'utf8')).away === true;
+  } catch {
+    return false;
+  }
+}
+
 function ago(ms: number): string {
   const min = Math.round((Date.now() - ms) / 60_000);
   return min < 1 ? 'just now' : `${min} min ago`;

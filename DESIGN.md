@@ -414,6 +414,34 @@ there are new messages or file changes, so an agent nobody is messaging sees not
     seconds a verdict, $0.07 for a session's first four.
   - `harness`: each harness's own automatic approvals where it has them (Claude Code's `auto`
     permission mode); what still reaches MetaHarness goes to the gatekeeper, then you.
+  - `allow`: what stays in the project runs. Of 323 approvals that reached the human in two
+    weeks of real runs, 321 were approved, mostly within seconds; friends trying it approved
+    every command unread. So the check that matters is whether a command reaches outside the
+    project: a path it names that resolves elsewhere (redirection targets included,
+    here-document text and patterns not; `src/readonly.ts` `pathsOutside` with `writes`), or
+    running as another user. Those go to the gatekeeper, and its ASK to the goal's lead as a
+    second eye (`approval.lead`): the lead answers with `send` (`allow: yes | no`), and if it
+    doesn't within `stallMinutes`, the request comes to you. A script fed to a program
+    (`python3 - <<'PY'`) names nothing it can see, and runs.
+- **Safety, not scope.** The gatekeeper judges whether a command is safe for the machine, the
+  project and its history; whether it fits the agent's task is the lead's to judge. Its ASKs in
+  the same two weeks were mostly noise of our own: here-document bodies hidden from it even
+  when they were the script being run (now only text `cat` or `tee` write out is hidden),
+  Antigravity agents reading the tool definitions and saved output Antigravity points them at
+  (now their places, through the adapter's `ownDirs`), and "beyond the task" judgements.
+- **Away.** The human can say they're away (`presence.set`, `mh away`, a button on Home); it
+  holds across restarts (`presence.json`). Nothing waits on them then: approvals go to the
+  gatekeeper whatever the mode, and its ASK to the lead; the lead's own ASKs are refused, as
+  nobody else can give them. Approvals waiting when they leave are refused, so the agent asks
+  again. The lead's questions and decisions still reach the Inbox, but `send` returns at once
+  telling it not to wait. A teammate's `send` to the human isn't sent (`message.held`): it's
+  told the human is away and to ask the lead, which the away rule tells to answer. Waiting on
+  the human no longer exempts an agent from stall reports.
+  The **`away` rules** (a rule moment, §18) reach the agents they're for when the human leaves,
+  and are in the prompt of those that start while they're away. The default one, for leads:
+  decide what you can, give the workflow's own approvals (a design) when they stay within the
+  goal, write each in `shared/decisions.md` for review, park what goes beyond the goal or
+  can't be undone. Coming back tells the leads.
 - **Questions:** `send("human", …)` also lands in the Inbox.
 - **Steering:** you can message any agent, the lead, or everyone, and pause, resume or stop any
   of them.
@@ -533,7 +561,7 @@ type Event = {
 | Activity | `agent.text` (streamed) · `agent.tool_call` {tool, summary, paths?, edit?} (the repository files it names, relative to the repository's or worktree's top; `edit` for edit tools; MetaHarness's own tools never count) · `agent.tool_result` {summary, ok} · `agent.file_edit` {path, diff} · `agent.paused_between_steps` {urgent, waitedMs, cut} | Agent detail stream |
 | Messages | `message.sent` {from, to, text, urgent} · `message.delivered` {via: hook \| tool \| turn \| interrupt} · `message.read` | Graph, sequence view |
 | Shared folder | `shared.write` {path, version, by, history} · `shared.delete` {path, by} · `shared.clash` {path, owner, by, previous} · `shared.read` {path} (not yet) | Graph file nodes, folder browser |
-| You | `inbox.item` {kind: approval \| decision \| question \| stuck \| crash} · `inbox.resolved` · `approval.auto` · `approval.refused` {tool, detail, why} | Inbox, notifications |
+| You | `inbox.item` {kind: approval \| decision \| question \| stuck \| crash} · `inbox.resolved` · `approval.auto` {why: read-only \| allow} · `approval.refused` {tool, detail, why} · `approval.lead` · `approval.lead_answered` · `approval.lead_silent` · `human.away` · `human.back` | Inbox, notifications |
 | Usage | `usage` {tokens_in, tokens_out, cost, context_pct?} | Costs, context bars |
 | Git | `git.commit` {branch, sha, summary, files, added, removed, paths} · `git.merge` {from, into, sha, fastForward?, files?, added?, removed?, paths?} · `git.conflict` {op, branch, from, files, dir} · `git.conflict_resolved` {op, branch, how, dir} · `git.landed` {branch, from, to, commits, by, paths, summaries} | Git view, Design view |
 | Design | `design.changed` {sha, areas, edges, files, symbols, highlights} (what moved since the snapshot before) · `design.failed` {sha, error} · `note.pinned` {id, path, text} · `note.delivered` {id, path} · `note.removed` {id} · `note.kept` {id, rule, file} | Design view, Story |
@@ -554,6 +582,7 @@ Agent states: `starting` · `working` · `waiting` · `idle` · `done` · `ended
 | `agent.spawn` | role, brief, parent? (none = spawned by you; its result comes to your Inbox), name?, worktree?, from? |
 | `agent.respawn` | agent (a crashed one), fresh?, on? (harness/model from its role), note? |
 | `inbox.resolve` | item, decision (approve \| deny \| dismiss), reply? |
+| `presence.set` | away (true \| false) |
 | `agent.open_native` | agent → the command to open its session in its own harness from its folder (e.g. `claude --resume <id>`), and a warning if it's still running |
 | `harness.test` | harness, model? |
 | `note.pin` · `note.remove` · `note.keep` | goal, path (an area: a folder or file, '' for the whole project), text · id · id, scope? (keep writes a path rule) |
@@ -1135,7 +1164,7 @@ user can edit, extend or turn off.
 ```markdown
 <!-- .metaharness/rules/areas.md -->
 ---
-when: path                  # start | path | new-file | commit | done
+when: path                  # start | path | new-file | commit | done | away
 description: the part of ARCHITECTURE.md for where you're working
 roles: all                  # all · team · helpers · lead · role names · !name to leave one out
 paths: **                   # globs, !glob to leave some out (path, new-file, commit)

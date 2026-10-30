@@ -178,6 +178,11 @@ export interface HarnessAdapter {
   toolRequest?(tool: string, args: Record<string, unknown>): ToolRequest;
   /** The command a human runs to open a session in the harness itself, e.g. `claude --resume <id>`. */
   nativeCommand?(sessionId: string): string;
+  /**
+   * Folders the harness keeps for a session that its agent reads as part of its work, like the
+   * tool definitions and saved tool output Antigravity points it at: its places, as the project is.
+   */
+  ownDirs?(sessionId: string): string[];
 }
 
 /**

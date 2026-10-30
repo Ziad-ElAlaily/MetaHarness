@@ -4,7 +4,7 @@ import { loadConfig, parseFrontMatter } from './config.ts';
 import type { McpServerDef } from './mcpservers.ts';
 import type { Role } from './types.ts';
 import { BUILTIN_DIR, loadRuleFiles, loadRules, RULE_WHENS, type Rule } from './rules.ts';
-import { loadSettings } from './settings.ts';
+import { APPROVAL_MODES, loadSettings, type ApprovalMode } from './settings.ts';
 import { loadSkillFolder, loadSkills, skillFiles, skillLayers, type Skill, type SkillSource } from './skills.ts';
 
 /**
@@ -299,7 +299,7 @@ export function saveRole(scopes: ScopeDir[], b: Record<string, unknown>): string
       ['mcp', strList(b.mcp).join(', ')],
       ['skills', strList(b.skills).join(', ')],
       ['auto_approve', b.autoApprove === 'none' ? 'none' : ''],
-      ['approvals', ['ask', 'gatekeeper', 'harness'].includes(str(b.approvals)) ? str(b.approvals) : ''],
+      ['approvals', APPROVAL_MODES.includes(str(b.approvals) as ApprovalMode) ? str(b.approvals) : ''],
       ['permission_mode', str(b.permissionMode)],
       ['allow', allow.join(', ')],
       ['native_skills', b.nativeSkills === true ? 'true' : ''],

@@ -74,7 +74,19 @@ export function eventLine(e: MhEvent): string {
     case 'approval.refused':
       return `${t}  ${who}refused: ${oneLine(d.detail, 80)} (${oneLine(d.why, 80)})`;
     case 'approval.auto':
-      return `${t}  ${who}ran without asking (read-only): ${oneLine(d.detail, 110)}`;
+      return `${t}  ${who}ran without asking (${d.why === 'allow' ? 'stays in the project' : 'read-only'}): ${oneLine(d.detail, 110)}`;
+    case 'approval.lead':
+      return `${t}  ${who}asks ${d.lead} to approve: ${oneLine(d.detail, 110)}`;
+    case 'approval.lead_answered':
+      return `${t}  ${who}${d.allow ? 'allowed' : 'refused'} ${d.to}'s request${d.text ? `: ${oneLine(d.text, 100)}` : ''}`;
+    case 'approval.lead_silent':
+      return `${t}  ${who}${d.lead} didn't answer its request in ${d.minutes} min; it goes to you`;
+    case 'message.held':
+      return `${t}  ${who}asked you while you're away; told to ask ${d.lead}: ${oneLine(d.text, 100)}`;
+    case 'human.away':
+      return `${t}  ${'you'.padEnd(15)}are away`;
+    case 'human.back':
+      return `${t}  ${'you'.padEnd(15)}are back`;
     case 'agent.context_full':
       return `${t}  ${who}context ${d.pct}% full${d.notesAsked ? '; asked to write notes, then continues in a fresh session' : '; its next message starts a fresh session'}`;
     case 'agent.context_handoff':

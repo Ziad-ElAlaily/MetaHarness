@@ -113,7 +113,7 @@ If the spec is unclear or seems wrong, message whoever gave it to you rather tha
 | `helper: true` | A quick helper (like `scout`): answers one question and returns, inside its caller's turn |
 | `allow` | Commands it may run without asking, Claude Code style: `Bash(npm test*), Bash(git commit*)` |
 | `auto_approve: none` | Always ask you, even for read-only commands (the default approves those itself) |
-| `approvals` | `ask`, `gatekeeper` or `harness`: who decides the rest for this role (default: the Settings page's choice, section 7) |
+| `approvals` | `ask`, `gatekeeper`, `harness` or `allow`: who decides the rest for this role (default: the Settings page's choice, section 7) |
 | `permission_mode` | The harness's own mode, e.g. `default` for Claude Code to ask before every edit |
 | `mcp` | MCP servers it needs besides MetaHarness's own, by name (section 8) |
 | `workflow` | A workflow it always follows |
@@ -534,8 +534,29 @@ Home, or a room's header): what to talk about, and the makers.
   - **Ask me:** everything else waits in your Inbox.
   - **Harness's own:** Claude Code's auto mode decides first; the gatekeeper, then you, for
     what it still asks about.
+  - **Allow in the project:** for when you'd approve every command anyway. Whatever stays in the
+    project runs without asking. A command that names a path outside it (a redirection to
+    `~/.profile`, `rm -rf ~/x`, `cd ..`) or runs as another user (`sudo`) goes to the
+    gatekeeper, and what the gatekeeper won't settle goes to the goal's lead as a second eye:
+    the lead answers with `send` (`allow: yes` or `no`). The lead's own requests, and those the
+    lead doesn't answer within the stall time (`stallMinutes`, 10), come to you.
 
   Each harness keeps its own sandbox on top.
+- **Away.** When you want a goal to finish without you, press **I'm away** in a goal's header
+  or on Home (or `mh away`); it's for every goal, not just that one. Nothing waits on you then:
+  - approvals go to the gatekeeper whatever the setting, and what it won't settle to the lead;
+    the lead's own are refused (it finds another way, or leaves it for you). An approval already
+    waiting when you leave is refused, so the agent asks again and someone else decides;
+  - what the lead sends you still lands in your Inbox, but it's told not to wait for the answer;
+    a teammate's message to you isn't sent: it's told you're away and to ask the lead instead
+    (and so is a teammate whose question was already waiting when you left);
+  - the `away` rule reaches the leads: decide what you can, approve the workflow's own
+    approvals (a design) when they stay within the goal, write each such decision in
+    `shared/decisions.md` for you to review, and park what goes beyond the goal or can't be
+    undone. Edit it on the Rules page like any other.
+
+  **I'm back** (or `mh back`) and questions and approvals reach you again. It's the daemon's
+  state, so it holds across restarts and for every client.
 - **Prompt caches.** An agent between tasks keeps its prompt cache warm for a while (an hour
   for Claude Code, a few minutes elsewhere); the team list counts it down. Shortly before it
   expires, the agent's spawner is told, so it can send follow-up work while it's cheap. You're
@@ -656,7 +677,7 @@ restarting the daemon. The pages write the same files described below.
 
   ```markdown
   ---
-  when: path                 # start, path, new-file, commit or done
+  when: path                 # start, path, new-file, commit, done or away
   description: how handlers in src/api are written
   paths: src/api/**          # globs; !glob leaves some out
   roles: team                # all, team, helpers, lead, role names, !name

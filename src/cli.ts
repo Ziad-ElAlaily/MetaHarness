@@ -49,6 +49,8 @@ const HELP = `mh: run a team of AI agents from different providers on one goal
   mh approve <item> [<note>]         Approve a permission request or a decision from your Inbox
   mh deny <item> [<reason>]          Deny it; the agent gets the reason (for a decision: what to change)
   mh dismiss <item>                  Clear an Inbox item
+  mh away | mh back                  Say you're away: nothing waits on you, leads decide what they can
+                                     and approve what reaches outside the project. back: you answer again
 
 Environment: MH_HOME (default ~/.metaharness), MH_PORT (default 7777)`;
 
@@ -186,6 +188,7 @@ async function printStatus(goalId?: string): Promise<void> {
       console.log(`  ${a.id.padEnd(14)}${a.status.padEnd(9)}${[used, a.window, resets].filter(Boolean).join(' · ')}`);
     }
   }
+  if (s.away) console.log("\nYou're away: nothing waits on you (mh back when you return).");
   if (s.inbox.length) {
     console.log(`\nFor you (${s.inbox.length}):`);
     for (const i of s.inbox) console.log(`  ${i.id}  [${i.kind}] ${i.agent}: ${String(i.text).replace(/\n/g, '\n            ')}`);
@@ -401,6 +404,12 @@ async function main(): Promise<void> {
     case 'dismiss': {
       if (!pos[0]) die(`Usage: mh ${cmd} <item>. mh status lists Inbox items.`);
       const r = await command({ cmd: 'inbox.resolve', item: pos[0], decision: cmd, reply: pos.slice(1).join(' ') || undefined });
+      console.log(r.result);
+      return;
+    }
+    case 'away':
+    case 'back': {
+      const r = await command({ cmd: 'presence.set', away: cmd === 'away' });
       console.log(r.result);
       return;
     }

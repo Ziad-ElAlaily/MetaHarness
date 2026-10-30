@@ -96,6 +96,8 @@ export interface Manifest {
 export interface Snapshot {
   goals: Goal[];
   inbox: InboxItem[];
+  /** You said you're away: nothing waits on you. */
+  away?: boolean;
   roles: { name: string; harness: string; model: string; goodAt: string; helper: boolean; worktree: boolean }[];
   workflows: { name: string; goodAt: string }[];
   accounts: Account[];
@@ -188,7 +190,7 @@ export interface WorkflowDef {
   body: string;
 }
 
-export type RuleWhen = 'start' | 'path' | 'new-file' | 'commit' | 'done';
+export type RuleWhen = 'start' | 'path' | 'new-file' | 'commit' | 'done' | 'away';
 export type ChangeKind = 'added' | 'modified' | 'deleted' | 'renamed';
 
 /** A note MetaHarness hands agents at a moment it can see (design §18). */
@@ -466,7 +468,7 @@ export interface ModelSettings {
   cacheMinutes?: number;
 }
 
-export type ApprovalMode = 'ask' | 'gatekeeper' | 'harness';
+export type ApprovalMode = 'ask' | 'gatekeeper' | 'harness' | 'allow';
 
 export interface Settings {
   approvals: ApprovalMode;

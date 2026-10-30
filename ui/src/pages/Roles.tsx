@@ -345,6 +345,7 @@ function RoleForm({ config, draft, set, isNew, original, footer }: { config?: Co
                   <option value="ask">Ask me</option>
                   <option value="gatekeeper">The gatekeeper, then me</option>
                   <option value="harness">The harness’s own, then the gatekeeper</option>
+                  <option value="allow">Allow in the project; the gatekeeper and the lead for the rest</option>
                 </select>
               </Field>
               <Field label="Also allowed without asking" hint="Claude Code style patterns, e.g. Bash(npm test*). Press Enter after each.">

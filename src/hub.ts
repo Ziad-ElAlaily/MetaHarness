@@ -36,6 +36,7 @@ export const TOOL_DOCS: Record<(typeof TOOL_NAMES)[number], { description: strin
       text: 'The message',
       urgent: 'true to interrupt them',
       decision: 'With to: human, true to ask for an approval (e.g. of a design). Say what to approve and where it is; the answer arrives as a message',
+      allow: "For a lead, answering a teammate's request that MetaHarness passed to you: yes to let it run, no to refuse it (text says why)",
     },
   },
   wait: {
@@ -174,6 +175,9 @@ export class Hub {
         const to = str(pick(a, 'to', 'recipient', 'agent', 'target', 'who'));
         const text = str(pick(a, 'text', 'message', 'content', 'body', 'msg'));
         if (!to) return 'send needs "to": a teammate name, a role, lead, all, or human.';
+        const human = /^(human|you|user)$/i.test(to);
+        const allow = pick(a, 'allow', ...(human ? [] : ['approve', 'approval']));
+        if (allow !== undefined && !human) return d.answerApproval(rec, to, truthy(allow) || /^(allow|approve|ok)/i.test(String(allow)), text);
         if (!text) return 'send needs some text.';
         return d.deliver(rec.goal, rec.name, to, text, truthy(pick(a, 'urgent', 'interrupt')), truthy(pick(a, 'decision', 'approval', 'approve')));
       }

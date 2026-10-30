@@ -26,10 +26,12 @@ export interface ModelSettings {
 /**
  * ask: the human decides whatever the rules don't. gatekeeper: a model in the gatekeeper role
  * decides, and passes the risky ones to the human. harness: each harness's own automatic
- * approvals where it has them (Claude Code's auto mode), the gatekeeper for the rest.
+ * approvals where it has them (Claude Code's auto mode), the gatekeeper for the rest. allow:
+ * whatever stays in the project runs; what reaches outside it goes to the gatekeeper, and what
+ * the gatekeeper won't settle to the lead, as a second eye.
  */
-export type ApprovalMode = 'ask' | 'gatekeeper' | 'harness';
-export const APPROVAL_MODES: ApprovalMode[] = ['ask', 'gatekeeper', 'harness'];
+export type ApprovalMode = 'ask' | 'gatekeeper' | 'harness' | 'allow';
+export const APPROVAL_MODES: ApprovalMode[] = ['ask', 'gatekeeper', 'harness', 'allow'];
 
 export interface Settings {
   approvals: ApprovalMode;

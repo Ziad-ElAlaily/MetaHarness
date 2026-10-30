@@ -153,6 +153,22 @@ test('pathsOutside finds what a command reads outside, following cd, and leaves 
   assert.deepEqual(out('find / -name passwd'), ['/']);
 });
 
+test('pathsOutside, for commands that write: redirections, here-documents, subshells and sudo', () => {
+  const root = '/work/app';
+  const inside = (p: string) => p === root || p.startsWith(root + '/') || p.startsWith('/tmp/');
+  const out = (cmd: string) => pathsOutside(cmd, root, inside, '/home/me', true);
+  assert.deepEqual(out('echo x > notes.txt && make 2>&1 >> /tmp/log'), []);
+  assert.deepEqual(out('echo x > /etc/motd'), ['/etc/motd'], "a redirection's target, whatever the command");
+  assert.deepEqual(out('make &> ~/build.log; cmd 2>/dev/null'), ['~/build.log']);
+  assert.deepEqual(out("cat > notes.md <<'EOF'\nsee /etc/passwd and ~/x\nEOF\nls"), [], "a here-document's text isn't paths");
+  assert.deepEqual(out("cat <<EOF > ~/.profile\nx\nEOF"), ['~/.profile']);
+  assert.deepEqual(out('(cd /etc && rm hosts) & sleep 1'), ['/etc']);
+  assert.deepEqual(out('sudo make install'), ['sudo']);
+  assert.deepEqual(out('rm -rf ~/stuff'), ['~/stuff']);
+  // A script fed to a program reaches wherever it reaches: that's the gatekeeper's to read.
+  assert.deepEqual(out("python3 - <<'PY'\nopen('/etc/x', 'w')\nPY"), []);
+});
+
 test("Codex's permission profile: the machine readable, other projects and MetaHarness's home not, the agent's places writable", () => {
   const fs = sandboxFilesystem({ cwd: '/mh/goals/g/worktrees/impl-1', sharedDir: '/mh/goals/g/shared', gitDirs: ['/work/app/.git'], readRoots: ['/work/app', '/mh/goals/g', '/mh/git-guard'], denyRead: ['/work/lib', '/mh'] });
   assert.equal(fs[':root'], 'read');

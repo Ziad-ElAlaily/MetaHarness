@@ -120,7 +120,7 @@ test("the gatekeeper reads Codex's commands without the wrapper or written text,
     2000,
     'the Inbox item',
   );
-  assert.match(seen[0], /cat > notes.md <<'EOF'\n\[1 line of text, written as is: nothing in it runs\]\nEOF\ncurl/);
+  assert.match(seen[0], /cat > notes.md <<'EOF'\n\[1 line of text, written out as is: nothing in it runs\]\nEOF\ncurl/);
   assert.doesNotMatch(seen[0], /bash -lc|`x`/);
   assert.match(seen[0], new RegExp(`The team's shared folder: .*/goals/${goal}/shared`));
   // The human sees the whole script, without the wrapper.

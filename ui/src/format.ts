@@ -84,7 +84,13 @@ export function eventText(e: MhEvent): string {
     case 'shared.write': return `wrote shared/${d.path} (v${d.version})`;
     case 'shared.delete': return `deleted shared/${d.path}`;
     case 'shared.clash': return `⚠ changed shared/${d.path}, which is ${d.owner}'s`;
-    case 'approval.auto': return `ran without asking (read-only): ${oneLine(d.detail, 140)}`;
+    case 'approval.auto': return `ran without asking (${d.why === 'allow' ? 'stays in the project' : 'read-only'}): ${oneLine(d.detail, 140)}`;
+    case 'approval.lead': return `asks ${d.lead} to approve: ${oneLine(d.detail, 140)}`;
+    case 'approval.lead_answered': return `${d.allow ? 'allowed' : 'refused'} ${d.to}'s request${d.text ? `: ${oneLine(d.text, 160)}` : ''}`;
+    case 'approval.lead_silent': return `${d.lead} didn't answer its request in ${d.minutes} min; it went to you`;
+    case 'message.held': return `asked you while you were away; told to ask ${d.lead} instead: ${oneLine(d.text, 200)}`;
+    case 'human.away': return 'you went away';
+    case 'human.back': return 'you came back';
     case 'approval.refused': return `refused: ${oneLine(d.detail, 100)} — ${oneLine(d.why, 160)}`;
     case 'agent.cache_expiring': return `prompt cache expires in about ${d.inSec < 90 ? `${d.inSec} s` : `${Math.round(d.inSec / 60)} min`}${d.told === 'parent' ? `; told ${d.parent}` : d.told === 'human' ? '; told you' : ''}`;
     case 'approval.gatekeeper': return `${GATE[d.verdict as string] ?? d.verdict}${d.remembered ? ' (as before)' : ''}: ${oneLine(d.detail, 100)} — ${oneLine(d.reason, 160)}`;
@@ -97,7 +103,7 @@ export function eventText(e: MhEvent): string {
   }
 }
 
-const RULE_MOMENT: Record<string, string> = { path: 'looking at', 'new-file': 'created', commit: 'committed', done: 'calling done' };
+const RULE_MOMENT: Record<string, string> = { path: 'looking at', 'new-file': 'created', commit: 'committed', done: 'calling done', away: 'you went away' };
 
 /** The moment a rule or skill note came: "looking at src/api/orders.ts". */
 function moment(d: Record<string, any>): string {
@@ -140,14 +146,14 @@ export function importance(e: MhEvent): 'key' | 'minor' | 'hidden' {
     case 'agent.spawned': case 'agent.done': case 'agent.crashed': case 'agent.ended': case 'agent.idle': case 'agent.moved': case 'agent.limited':
     case 'agent.context_handoff': case 'goal.stalled':
     case 'message.sent': case 'git.commit': case 'git.merge': case 'git.conflict': case 'git.conflict_resolved': case 'shared.clash': case 'inbox.resolved':
-    case 'design.changed': case 'note.pinned':
+    case 'design.changed': case 'note.pinned': case 'approval.lead': case 'approval.lead_answered': case 'human.away': case 'human.back':
       return 'key';
     case 'inbox.item':
       // Decisions and questions show as the message that asked them; results as the done note.
       return e.data.kind === 'approval' ? 'key' : 'hidden';
     case 'shared.write':
       return e.data.version === 1 ? 'key' : 'minor';
-    case 'agent.text': case 'agent.status': case 'agent.warning': case 'agent.tool_call': case 'approval.auto': case 'approval.refused': case 'approval.gatekeeper': case 'agent.cache_expiring': case 'shared.delete':
+    case 'agent.text': case 'agent.status': case 'agent.warning': case 'agent.tool_call': case 'approval.auto': case 'approval.refused': case 'approval.gatekeeper': case 'approval.lead_silent': case 'message.held': case 'agent.cache_expiring': case 'shared.delete':
     case 'agent.paused': case 'agent.resumed': case 'agent.paused_between_steps': case 'agent.interrupted': case 'account.limit': case 'agent.context_full':
     case 'rule.fired': case 'skill.read':
       return 'minor';

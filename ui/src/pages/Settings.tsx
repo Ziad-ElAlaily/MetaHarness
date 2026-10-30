@@ -9,6 +9,7 @@ const MODES: [ApprovalMode, string, string][] = [
   ['ask', 'Ask me', 'Whatever the fixed rules don’t settle comes to your Inbox.'],
   ['gatekeeper', 'Gatekeeper', 'A cheap model in the gatekeeper role allows what’s safe, refuses what’s harmful, and asks you about the rest, with its reason.'],
   ['harness', 'Harness’s own', 'Each harness’s automatic approvals where it has them (Claude Code’s auto mode); the gatekeeper, then you, for the rest.'],
+  ['allow', 'Allow in the project', 'Whatever stays in the project runs without asking. What reaches outside it goes to the gatekeeper, and what the gatekeeper won’t settle to the goal’s lead, as a second eye.'],
 ];
 
 interface Props extends Pick<SetupProps, 'config' | 'onSave'> {
