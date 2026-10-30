@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { Background, Controls, Handle, MarkerType, Position, ReactFlow, type Edge, type Node, type NodeProps } from '@xyflow/react';
+import { Background, Controls, Handle, MarkerType, Position, ReactFlow, ReactFlowProvider, type Edge, type Node, type NodeProps } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { api } from '../api.ts';
 import { agentColors } from '../agentColors.ts';
@@ -11,6 +11,7 @@ import { MarkedCode } from '../components/CodeView.tsx';
 import { DocTip, useDocs } from '../components/DocTip.tsx';
 import { Splitter } from '../components/Splitter.tsx';
 import { useNow } from '../components/common.tsx';
+import { useSteadyEdges, useSteadyNodes } from '../flowNodes.ts';
 import Systems, { type SystemsNav } from './Systems.tsx';
 import Git, { type GitSel } from './Git.tsx';
 
@@ -118,7 +119,9 @@ export default function Design({ goal, events, nav, onNav, onCommand, onSelectAg
   const [panel, setPanel] = useState(false);
   const [file, setFile] = useState<string>();
   const [messaging, setMessaging] = useState<string>();
-  const color = useMemo(() => agentColors(goal), [goal]);
+  // Colours follow who joined, not every refresh of the goal: a new colour function redraws every card.
+  const joined = goal.agents.filter(a => !a.quick).map(a => a.name).join('\n');
+  const color = useMemo(() => agentColors(goal), [joined]); // eslint-disable-line react-hooks/exhaustive-deps
   const now = useNow(5000);
   const running = goal.live && goal.status === 'running';
 
@@ -147,7 +150,8 @@ export default function Design({ goal, events, nav, onNav, onCommand, onSelectAg
   }, [goal.id, marks]);
 
   const snap = view?.snapshot ?? undefined;
-  const since = running ? now - LIVE_MS : 0;
+  // The window moves every half minute, so the activity isn't summed again on every clock tick.
+  const since = running ? Math.floor((now - LIVE_MS) / 30_000) * 30_000 : 0;
   const act = useMemo(() => activity(events, snap, since), [events, snap, since]);
   const notes = useMemo(() => pinnedNotes(events), [events]);
   const found = useMemo(() => insights(events, snap), [events, snap]);
@@ -799,15 +803,32 @@ type AreaData = {
 
 const BIG = ['class', 'interface', 'type', 'enum', 'module'];
 
-/** The few definitions worth naming on a card: new and removed classes first, then the rest. */
-function cardDefs(c: DesignChange | undefined, area: string): { sign: string; text: string }[] {
-  if (!c) return [];
-  const pick = (list: SymbolRef[], sign: string) => list.filter(s => s.area === area).map(s => ({ sign, text: `${s.kind} ${s.parent ? s.parent + '.' : ''}${s.name}`, big: BIG.includes(s.kind) || !s.parent }));
-  const all = [...pick(c.symbols.added, '+'), ...pick(c.symbols.removed, '−'), ...pick(c.symbols.changed, '~')];
-  return [...all.filter(d => d.big), ...all.filter(d => !d.big)].slice(0, 3);
+/** The few definitions worth naming on each area's card: new and removed classes first, then the rest. */
+function cardDefs(c: DesignChange | undefined): Map<string, { sign: string; text: string }[]> {
+  const all = new Map<string, { sign: string; text: string; big: boolean }[]>();
+  if (!c) return new Map();
+  const pick = (list: SymbolRef[], sign: string) => {
+    for (const s of list) {
+      const ds = all.get(s.area) ?? [];
+      ds.push({ sign, text: `${s.kind} ${s.parent ? s.parent + '.' : ''}${s.name}`, big: BIG.includes(s.kind) || !s.parent });
+      all.set(s.area, ds);
+    }
+  };
+  pick(c.symbols.added, '+');
+  pick(c.symbols.removed, '−');
+  pick(c.symbols.changed, '~');
+  return new Map([...all].map(([a, ds]) => [a, [...ds.filter(d => d.big), ...ds.filter(d => !d.big)].slice(0, 3).map(({ sign, text }) => ({ sign, text }))]));
 }
 
-function AreaMap({ snap, view, act, notes, color, layers, selected, lit, litFiles, flow, focus, now, onSelect }: {
+function AreaMap(p: AreaMapProps) {
+  return (
+    <ReactFlowProvider>
+      <AreaMapInner {...p} />
+    </ReactFlowProvider>
+  );
+}
+
+type AreaMapProps = {
   snap: DesignSnapshot;
   view: DesignScopeView;
   act: Activity;
@@ -822,13 +843,30 @@ function AreaMap({ snap, view, act, notes, color, layers, selected, lit, litFile
   focus?: string;
   now: number;
   onSelect: (a?: string) => void;
-}) {
+};
+
+/** Past this many arrows, an arrow's count shows when it matters (new, circular, the selected card's) or it's hovered. */
+const QUIET_EDGES = 80;
+
+function AreaMapInner({ snap, view, act, notes, color, layers, selected, lit, litFiles, flow, focus, now, onSelect }: AreaMapProps) {
   const change = view.change;
   const report = view.report;
-  const { nodes, edges } = useMemo(() => {
+  const [hoverEdge, setHoverEdge] = useState<string>();
+  // Folders the map leaves out that someone is editing: only a change in which redoes the layout.
+  const busyUnmapped = snap.map.areas.filter(a => a.unmapped && act.areas.get(a.path)?.edits.size).map(a => a.path).join('\n');
+  // Where each card sits, and what the snapshot holds per area: summed once, not per card.
+  const grid = useMemo(() => {
     const byArea = new Map(report?.areas.map(a => [a.path, a]));
+    const filesOf = new Map<string, DesignFile[]>();
+    for (const f of snap.files) {
+      const fs = filesOf.get(f.area) ?? [];
+      fs.push(f);
+      filesOf.set(f.area, fs);
+    }
+    const defsOf = cardDefs(change);
     // A folder the map leaves out shows when it holds code (a file a language pack reads), changed, or work is going on in it.
-    const shown = snap.map.areas.filter(a => !a.unmapped || snap.files.some(f => f.area === a.path && f.lang) || byArea.has(a.path) || !!act.areas.get(a.path)?.edits.size);
+    const busy = new Set(busyUnmapped.split('\n'));
+    const shown = snap.map.areas.filter(a => !a.unmapped || filesOf.get(a.path)?.some(f => f.lang) || byArea.has(a.path) || busy.has(a.path));
     const gone = layers.change ? (view.removedAreas ?? []) : [];
     const areas = [...shown, ...gone];
     const paths = areas.map(a => a.path);
@@ -838,20 +876,32 @@ function AreaMap({ snap, view, act, notes, color, layers, selected, lit, litFile
     const widest = Math.max(...[...rows.values()].map(r => r.length));
     const pos = new Map<string, { x: number; y: number }>();
     for (const [l, row] of rows) row.forEach((p, i) => pos.set(p, { x: (i + (widest - row.length) / 2) * (CW + 60), y: l * (CH + 70) }));
+    return { byArea, filesOf, defsOf, areas, gone, pos, fileArea: new Map(snap.files.map(f => [f.path, f.area])) };
+  }, [snap, view, change, report, layers.change, busyUnmapped]);
+  // Which areas someone edited in the last half minute: only a change in that redraws a card on the clock.
+  const working = layers.live ? [...act.areas].filter(([, t]) => now - t.lastEdit < 30_000).map(([p]) => p).join('\n') : '';
+
+  const built = useMemo(() => {
+    const { byArea, filesOf, defsOf, areas, gone, pos, fileArea } = grid;
     const near = new Set(selected === undefined ? [] : [selected, ...snap.edges.filter(e => e.from === selected).map(e => e.to), ...snap.edges.filter(e => e.to === selected).map(e => e.from)]);
     const editors = new Map<string, number>();
-    for (const [path, t] of act.files) if (t.edits.size > 1) editors.set(areaOf(snap.map.areas, path) ?? '', (editors.get(areaOf(snap.map.areas, path) ?? '') ?? 0) + 1);
+    for (const [path, t] of act.files) {
+      if (t.edits.size < 2) continue;
+      const a = areaOf(snap.map.areas, path) ?? '';
+      editors.set(a, (editors.get(a) ?? 0) + 1);
+    }
     const maxChurn = Math.max(1, ...(report?.areas.map(a => a.added + a.removed) ?? []));
     const maxHot = Math.max(1, ...(report?.areas.map(a => a.hotspot) ?? []));
     const litSet = new Set(lit);
+    const workingSet = new Set(working.split('\n'));
     const peekBy = new Map<string, string[]>();
     for (const f of litFiles ?? []) {
-      const a = snap.files.find(x => x.path === f)?.area ?? areaOf(snap.map.areas, f) ?? '';
+      const a = fileArea.get(f) ?? areaOf(snap.map.areas, f) ?? '';
       peekBy.set(a, [...(peekBy.get(a) ?? []), f]);
     }
     const peeking = !!litFiles;
-    const nodes: Node<AreaData>[] = areas.map(a => {
-      const files = snap.files.filter(f => f.area === a.path);
+    return areas.map((a): Node<AreaData> => {
+      const files = filesOf.get(a.path) ?? [];
       const t = layers.live ? act.areas.get(a.path) : undefined;
       const ch = byArea.get(a.path);
       const removed = gone.includes(a);
@@ -864,21 +914,27 @@ function AreaMap({ snap, view, act, notes, color, layers, selected, lit, litFile
         position: pos.get(a.path)!,
         data: {
           area: a, files: files.length, symbols: files.reduce((n, f) => n + (f.symbols?.length ?? 0), 0), touch: t, ch,
-          heat: ch ? (ch.added + ch.removed) / maxChurn : 0, hot: ch ? ch.hotspot / maxHot : 0, defs: cardDefs(change, a.path), color, layers,
+          heat: ch ? (ch.added + ch.removed) / maxChurn : 0, hot: ch ? ch.hotspot / maxHot : 0, defs: defsOf.get(a.path) ?? [], color, layers,
           added, removed, rewritten: !!change?.areas.rewritten.includes(a.path),
           notes: notes.filter(n => n.path === a.path || (n.path !== '' && a.path.startsWith(n.path + '/'))).length,
-          collisions: editors.get(a.path) ?? 0, working: !!t && now - t.lastEdit < 30_000, on: selected === a.path, lit: litSet.has(a.path) || peekBy.has(a.path),
+          collisions: editors.get(a.path) ?? 0, working: !!t && workingSet.has(a.path), on: selected === a.path, lit: litSet.has(a.path) || peekBy.has(a.path),
           peek: peekBy.get(a.path) ?? [],
           faded: peeking ? !peekBy.has(a.path) : (selected !== undefined && !near.has(a.path)) || !touchedByFocus || untouched,
         },
       };
     });
+  }, [grid, snap, act, notes, color, layers, selected, lit, litFiles, focus, working, change, report]);
+  const nodes = useSteadyNodes(built);
+
+  const builtEdges = useMemo(() => {
+    const { pos } = grid;
     const id = (p: string) => p || '(top)';
     const edges: Edge[] = [];
     if (layers.deps) {
       const added = new Set(change?.edges.added.map(e => `${e.from}\n${e.to}`));
       const circle = new Set<string>();
       for (const c of report?.cycles ?? []) for (const e of snap.edges) if (c.areas.includes(e.from) && c.areas.includes(e.to)) circle.add(`${e.from}\n${e.to}`);
+      const quiet = snap.edges.length > QUIET_EDGES;
       for (const e of snap.edges) {
         if (!pos.has(e.from) || !pos.has(e.to)) continue;
         const k = `${e.from}\n${e.to}`;
@@ -886,9 +942,10 @@ function AreaMap({ snap, view, act, notes, color, layers, selected, lit, litFile
         const inCycle = circle.has(k);
         const on = selected !== undefined && (e.from === selected || e.to === selected);
         const stroke = inCycle ? 'var(--waiting)' : isNew ? 'var(--chg-new)' : on ? 'var(--text-2)' : 'var(--line-strong)';
+        const eid = `${e.from}->${e.to}`;
         edges.push({
-          id: `${e.from}->${e.to}`, source: id(e.from), target: id(e.to), ...handlesFor(pos.get(e.from)!, pos.get(e.to)!, false),
-          label: [isNew && 'new', inCycle && 'circular', String(e.n)].filter(Boolean).join(' · '),
+          id: eid, source: id(e.from), target: id(e.to), ...handlesFor(pos.get(e.from)!, pos.get(e.to)!, false),
+          label: !quiet || isNew || inCycle || on || hoverEdge === eid ? [isNew && 'new', inCycle && 'circular', String(e.n)].filter(Boolean).join(' · ') : undefined,
           labelStyle: { fill: inCycle ? 'var(--waiting)' : 'var(--text-2)', fontSize: 11 }, labelBgStyle: { fill: 'var(--panel)' },
           style: { stroke, strokeWidth: isNew || inCycle ? 2.5 : on ? 2 : 1.25, opacity: selected !== undefined && !on ? 0.3 : 1 },
           markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
@@ -903,7 +960,10 @@ function AreaMap({ snap, view, act, notes, color, layers, selected, lit, litFile
     }
     if (layers.flows) {
       const unbacked = new Map(report?.flows.map(f => [f.name, new Set(f.unbacked.map(([a, b]) => `${a}\n${b}`))]));
-      (snap.map.flows ?? []).forEach((f, fi) => {
+      const flows = snap.map.flows ?? [];
+      // Many flows drawn at once: only the one picked moves, the rest stay still.
+      const still = flows.reduce((n, f) => n + f.steps.length, 0) > 40;
+      flows.forEach((f, fi) => {
         const steps = f.steps.filter(s => s.area !== undefined && pos.has(s.area));
         const on = flow === undefined || flow === f.name;
         for (let i = 1; i < steps.length; i++) {
@@ -911,7 +971,7 @@ function AreaMap({ snap, view, act, notes, color, layers, selected, lit, litFile
           if (a === b) continue;
           const weak = unbacked.get(f.name)?.has(`${a}\n${b}`);
           edges.push({
-            id: `flow:${fi}:${i}`, source: id(a), target: id(b), ...handlesFor(pos.get(a)!, pos.get(b)!, true), animated: true,
+            id: `flow:${fi}:${i}`, source: id(a), target: id(b), ...handlesFor(pos.get(a)!, pos.get(b)!, true), animated: !still || flow === f.name,
             label: i === 1 ? f.name : weak ? 'no import' : undefined,
             labelStyle: { fill: 'var(--text)', fontSize: 11, fontWeight: 600 }, labelBgStyle: { fill: 'var(--panel)' },
             style: { stroke: weak ? 'var(--waiting)' : 'var(--text)', strokeWidth: flow === f.name ? 3 : 2, opacity: on ? 0.85 : 0.12 },
@@ -920,8 +980,9 @@ function AreaMap({ snap, view, act, notes, color, layers, selected, lit, litFile
         }
       });
     }
-    return { nodes, edges };
-  }, [snap, view, act, notes, color, layers, selected, lit, litFiles, flow, focus, now, change, report]);
+    return edges;
+  }, [grid, snap, layers, selected, flow, change, report, hoverEdge]);
+  const edges = useSteadyEdges(builtEdges);
 
   return (
     <ReactFlow
@@ -930,6 +991,9 @@ function AreaMap({ snap, view, act, notes, color, layers, selected, lit, litFile
       nodeTypes={NODE_TYPES}
       onNodeClick={(_, n) => onSelect(n.id === '(top)' ? '' : n.id)}
       onPaneClick={() => onSelect(undefined)}
+      onEdgeMouseEnter={(_, e) => setHoverEdge(e.id)}
+      onEdgeMouseLeave={() => setHoverEdge(undefined)}
+      onlyRenderVisibleElements
       fitView
       fitViewOptions={{ padding: 0.08, maxZoom: 1 }}
       minZoom={0.15}

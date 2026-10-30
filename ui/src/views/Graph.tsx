@@ -1,9 +1,10 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Background, BaseEdge, Controls, getBezierPath, Handle, MarkerType, Position, ReactFlow, useReactFlow, ReactFlowProvider, type Edge, type EdgeProps, type Node, type NodeChange, type NodeProps } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { clock, eventText, isOwnTool, modelLabel, money, oneLine, STATE_LABEL } from '../format.ts';
 import type { Agent, Goal, MhEvent } from '../types.ts';
-import { Ctx, Dot, useNow } from '../components/common.tsx';
+import { Ctx, Dot, useClock } from '../components/common.tsx';
+import { useSteadyEdges, useSteadyNodes } from '../flowNodes.ts';
 import { Splitter } from '../components/Splitter.tsx';
 import { FileSide } from './Files.tsx';
 import { fileMentions, withFileLinks } from '../fileLinks.tsx';
@@ -29,18 +30,23 @@ interface Live {
   since: number;
 }
 
-type AgentData = { agent: Agent; live?: Live; waiting?: string; helpers: number; open: boolean; faded: boolean; on: boolean; toggle: () => void };
+type AgentData = { agent: Agent; live?: Live; waiting?: string; helpers: number; open: boolean; faded: boolean; on: boolean; toggle: (name: string) => void };
 type FileData = { path: string; faded: boolean; on: boolean };
 type MsgData = { pulses: string[]; color: string; picked: boolean };
 
 const short = (ms: number) => (ms < 60_000 ? `${Math.max(0, Math.floor(ms / 1000))}s` : ms < 3_600_000 ? `${Math.floor(ms / 60_000)}m` : `${Math.floor(ms / 3_600_000)}h${String(Math.floor((ms % 3_600_000) / 60_000)).padStart(2, '0')}`);
 const toolName = (t: string) => t.replace(/^mcp__\w+?__/, '');
+/** Past this many message and wait lines, they quieten: counts on the ones that matter, only the newest moving. */
+const QUIET_LINES = 60;
 const WAIT_WHY: Record<string, string> = { approval: 'your approval', question: 'your answer', decision: 'your decision' };
+
+/** How long since then, ticking: only this redraws every second, not the card. */
+function Ago({ since }: { since: number }) {
+  return <>{short(useClock(1000) - since)}</>;
+}
 
 function AgentCard({ data }: NodeProps<Node<AgentData>>) {
   const a = data.agent;
-  // Each card keeps its own clock, so durations tick without rebuilding the graph.
-  const now = useNow(1000);
   const live = data.live;
   const state = a.pausing ? 'paused' : a.state;
   const busy = a.state === 'working' || a.state === 'starting';
@@ -71,7 +77,7 @@ function AgentCard({ data }: NodeProps<Node<AgentData>>) {
       <div className={`now${step ? ' step' : ''}`} title={step ? `${step.name} ${step.summary}` : a.status}>
         {step ? (
           <>
-            <b>{toolName(step.name)}</b> {oneLine(step.summary, 60)} · {short(now - step.since)}
+            <b>{toolName(step.name)}</b> {oneLine(step.summary, 60)} · <Ago since={step.since} />
           </>
         ) : data.waiting ? (
           <>waiting on {data.waiting}</>
@@ -88,7 +94,12 @@ function AgentCard({ data }: NodeProps<Node<AgentData>>) {
       <div className="foot">
         <span>
           {a.pausing ? 'pausing…' : STATE_LABEL[a.state]}
-          {live && !['done', 'ended', 'crashed'].includes(a.state) ? ` ${short(now - live.since)}` : ''}
+          {live && !['done', 'ended', 'crashed'].includes(a.state) && (
+            <>
+              {' '}
+              <Ago since={live.since} />
+            </>
+          )}
         </span>
         <Ctx pct={a.contextPct} />
         <span>{money(a.cost)}</span>
@@ -97,7 +108,7 @@ function AgentCard({ data }: NodeProps<Node<AgentData>>) {
             className="helpers nodrag"
             onClick={e => {
               e.stopPropagation();
-              data.toggle();
+              data.toggle(a.name);
             }}
             title={data.open ? 'Fold its helpers' : 'Show its helpers'}
           >
@@ -304,11 +315,16 @@ function GraphInner({ goal, events, selected, agentPanel, file, onSelect, onFile
   const live = useMemo(() => liveOf(events), [events]);
   const said = useMemo(() => conversation(events), [events]);
 
+  const byName = useMemo(() => new Map(goal.agents.map(a => [a.name, a])), [goal.agents]);
   const layout = useMemo(() => {
     const visible = goal.agents.filter(a => !a.quick || openHelpers.has(a.parent));
     const shown = new Set(visible.map(a => a.name));
     const kids = new Map<string, Agent[]>();
-    for (const a of visible) kids.set(a.parent, [...(kids.get(a.parent) ?? []), a]);
+    for (const a of visible) {
+      const k = kids.get(a.parent) ?? [];
+      k.push(a);
+      kids.set(a.parent, k);
+    }
 
     // A tree, each subtree as wide as its leaves.
     const pos = new Map<string, { x: number; y: number }>();
@@ -330,9 +346,9 @@ function GraphInner({ goal, events, selected, agentPanel, file, onSelect, onFile
     const leaves = Math.max(1, next);
 
     const since = Date.now() - windowMs;
-    const recent = events.filter(e => new Date(e.ts).getTime() >= since);
+    const recent = windowMs === Infinity ? events : events.filter(e => new Date(e.ts).getTime() >= since);
     // Messages from or to a folded helper count as its caller's.
-    const owner = (n: string): string => (n === 'human' ? 'human' : shown.has(n) ? n : (goal.agents.find(a => a.name === n)?.parent ?? n));
+    const owner = (n: string): string => (n === 'human' ? 'human' : shown.has(n) ? n : (byName.get(n)?.parent ?? n));
     const msgs = new Map<string, { from: string; to: string; n: number; last: number; recent: { id: string; at: number }[] }>();
     for (const e of recent) {
       if (e.type !== 'message.sent' || !e.agent) continue;
@@ -348,11 +364,11 @@ function GraphInner({ goal, events, selected, agentPanel, file, onSelect, onFile
       msgs.set(k, m);
     }
     const writes = new Map<string, { by: string; path: string; n: number }>();
-    const files: string[] = [];
+    const fileSet = new Set<string>();
     for (const e of recent) {
       if (e.type !== 'shared.write') continue;
       const path = String(e.data.path);
-      if (!files.includes(path)) files.push(path);
+      fileSet.add(path);
       const by = e.agent ? owner(e.agent) : '';
       if (!by) continue;
       const k = `${by}→${path}`;
@@ -360,38 +376,35 @@ function GraphInner({ goal, events, selected, agentPanel, file, onSelect, onFile
       w.n++;
       writes.set(k, w);
     }
+    const files = [...fileSet];
 
     // Files in a grid under the team, about as wide as it, centred.
     const cols = Math.max(1, Math.min(files.length, Math.max(Math.ceil(Math.sqrt(files.length)), Math.floor((leaves * W) / FW))));
     const left = ((leaves - 1) * W - (cols - 1) * FW) / 2;
     files.forEach((path, i) => pos.set(`file:${path}`, { x: left + (i % cols) * FW, y: (maxDepth + 1) * H + 30 + Math.floor(i / cols) * FH }));
-    return { visible, shown, owner, pos, msgs, writes, files };
-  }, [goal, events, windowMs, openHelpers]);
+    return { visible, shown, owner, pos, msgs, writes, files, fileSet };
+  }, [goal, byName, events, windowMs, openHelpers]);
 
-  const { nodes, edges, nextPulseEnd } = useMemo(() => {
-    const { visible, shown, owner, msgs, writes, files } = layout;
-    const now = Date.now();
+  const pos = useMemo(() => {
     const pos = new Map(layout.pos);
     for (const [id, p] of Object.entries(moved)) if (pos.has(id)) pos.set(id, p);
-
-    // Who each agent waits on, folded helpers counting as their caller.
-    const waits = visible.flatMap(a => (a.waitingOn ? [...new Set(a.waitingOn.who.map(owner))].filter(w => w !== a.name).map(w => ({ from: a.name, to: w, why: a.waitingOn!.why })) : []));
-    const waitLabel = (a: Agent) => {
-      const w = a.waitingOn;
-      if (!w) return undefined;
-      if (WAIT_WHY[w.why]) return WAIT_WHY[w.why];
-      const names = w.who.map(n => (n === 'human' ? 'you' : n));
-      return names.length > 2 ? `${names.slice(0, 2).join(', ')} +${names.length - 2}` : names.join(', ');
-    };
-
-    // Focus: the selected agent, its parent and children, whoever it talked to or waits on, what it wrote.
+    return pos;
+  }, [layout, moved]);
+  // Who each agent waits on, folded helpers counting as their caller.
+  const waits = useMemo(
+    () => layout.visible.flatMap(a => (a.waitingOn ? [...new Set(a.waitingOn.who.map(layout.owner))].filter(w => w !== a.name).map(w => ({ from: a.name, to: w, why: a.waitingOn!.why })) : [])),
+    [layout],
+  );
+  // Focus: the selected agent, its parent and children, whoever it talked to or waits on, what it wrote.
+  const related = useMemo(() => {
+    const { visible, shown, msgs, writes, fileSet } = layout;
     const related = new Set<string>();
-    if (focus && file && files.includes(file)) {
+    if (focus && file && fileSet.has(file)) {
       related.add(`file:${file}`);
       for (const w of writes.values()) if (w.path === file) related.add(w.by);
     } else if (focus && selected && shown.has(selected)) {
       related.add(selected);
-      const me = goal.agents.find(a => a.name === selected);
+      const me = byName.get(selected);
       if (me) related.add(me.parent);
       for (const a of visible) if (a.parent === selected) related.add(a.name);
       for (const m of msgs.values()) {
@@ -404,8 +417,34 @@ function GraphInner({ goal, events, selected, agentPanel, file, onSelect, onFile
       }
       for (const w of writes.values()) if (w.by === selected) related.add(`file:${w.path}`);
     }
-    const faded = (id: string) => related.size > 0 && !related.has(id);
+    return related;
+  }, [layout, waits, byName, focus, file, selected]);
+  const helpers = useMemo(() => {
+    const n = new Map<string, number>();
+    for (const a of goal.agents) if (a.quick) n.set(a.parent, (n.get(a.parent) ?? 0) + 1);
+    return n;
+  }, [goal.agents]);
+  const toggle = useCallback(
+    (name: string) =>
+      setOpenHelpers(s => {
+        const n = new Set(s);
+        if (n.has(name)) n.delete(name);
+        else n.add(name);
+        return n;
+      }),
+    [],
+  );
 
+  const built = useMemo(() => {
+    const { visible, files } = layout;
+    const faded = (id: string) => related.size > 0 && !related.has(id);
+    const waitLabel = (a: Agent) => {
+      const w = a.waitingOn;
+      if (!w) return undefined;
+      if (WAIT_WHY[w.why]) return WAIT_WHY[w.why];
+      const names = w.who.map(n => (n === 'human' ? 'you' : n));
+      return names.length > 2 ? `${names.slice(0, 2).join(', ')} +${names.length - 2}` : names.join(', ');
+    };
     const built: Node[] = [
       { id: 'human', type: 'human', position: pos.get('human')!, data: {}, draggable: true },
       ...visible.map(
@@ -413,22 +452,7 @@ function GraphInner({ goal, events, selected, agentPanel, file, onSelect, onFile
           id: a.name,
           type: 'agent',
           position: pos.get(a.name)!,
-          data: {
-            agent: a,
-            live: live.get(a.name),
-            waiting: waitLabel(a),
-            helpers: goal.agents.filter(h => h.quick && h.parent === a.name).length,
-            open: openHelpers.has(a.name),
-            faded: faded(a.name),
-            on: a.name === selected,
-            toggle: () =>
-              setOpenHelpers(s => {
-                const n = new Set(s);
-                if (n.has(a.name)) n.delete(a.name);
-                else n.add(a.name);
-                return n;
-              }),
-          },
+          data: { agent: a, live: live.get(a.name), waiting: waitLabel(a), helpers: helpers.get(a.name) ?? 0, open: openHelpers.has(a.name), faded: faded(a.name), on: a.name === selected, toggle },
         }),
       ),
       ...files.map(
@@ -440,9 +464,20 @@ function GraphInner({ goal, events, selected, agentPanel, file, onSelect, onFile
         }),
       ),
     ];
-    const nodes = built.map(n => (sizes[n.id] ? { ...n, measured: sizes[n.id] } : n));
+    return built.map(n => (sizes[n.id] ? { ...n, measured: sizes[n.id] } : n));
+  }, [layout, pos, sizes, live, related, helpers, openHelpers, selected, file, toggle]);
+  // Only the cards whose agent changed redraw on an event.
+  const nodes = useSteadyNodes(built);
+  const idKey = built.map(n => n.id).join('\n');
+
+  const { edges: builtEdges, nextPulseEnd } = useMemo(() => {
+    const { visible, shown, msgs, writes } = layout;
+    const now = Date.now();
+    const ids = new Set(idKey.split('\n'));
     const dim = (a: string, b: string) => (related.size > 0 && !(related.has(a) && related.has(b)) ? 0.15 : 1);
     const inPair = (a: string, b: string) => !!pair && ((pair[0] === a && pair[1] === b) || (pair[0] === b && pair[1] === a));
+    // Many lines: a line's count shows on the ones picked or in focus, and only the newest move.
+    const quiet = msgs.size + waits.length > QUIET_LINES;
     let nextPulseEnd = Infinity;
     const edges: Edge[] = [
       ...visible.map(
@@ -461,6 +496,7 @@ function GraphInner({ goal, events, selected, agentPanel, file, onSelect, onFile
         const pulses = m.recent.filter(r => now - r.at < PULSE_MS + 300);
         for (const r of pulses) nextPulseEnd = Math.min(nextPulseEnd, r.at + PULSE_MS + 300);
         const picked = inPair(m.from, m.to);
+        const lit = picked || (related.size > 0 && related.has(m.from) && related.has(m.to));
         return {
           id: `msg:${m.from}→${m.to}`,
           source: m.from,
@@ -468,8 +504,8 @@ function GraphInner({ goal, events, selected, agentPanel, file, onSelect, onFile
           target: m.to,
           targetHandle: th,
           type: 'message',
-          animated: now - m.last < 15_000,
-          label: String(m.n),
+          animated: now - m.last < (quiet ? 5_000 : 15_000),
+          label: !quiet || lit ? String(m.n) : undefined,
           data: { pulses: pulses.map(r => r.id), color, picked },
           style: { stroke: color, strokeWidth: Math.min(5, 1 + Math.log2(m.n)) + (picked ? 2 : 0), opacity: pair && !picked ? 0.35 : dim(m.from, m.to), cursor: 'pointer' },
           markerEnd: { type: MarkerType.ArrowClosed, color },
@@ -484,7 +520,7 @@ function GraphInner({ goal, events, selected, agentPanel, file, onSelect, onFile
           target: w.to,
           targetHandle: th,
           type: 'default',
-          animated: true,
+          animated: !quiet,
           label: w.why === 'partner' ? 'waits' : w.why === 'helpers' ? 'waits for' : `waits: ${w.why}`,
           style: { stroke: 'var(--waiting)', strokeWidth: 1.6, strokeDasharray: '6 4', opacity: dim(w.from, w.to) },
           markerEnd: { type: MarkerType.Arrow, color: 'var(--waiting)' },
@@ -501,9 +537,11 @@ function GraphInner({ goal, events, selected, agentPanel, file, onSelect, onFile
           style: { stroke: 'var(--text-3)', strokeDasharray: '4 3', opacity: dim(w.by, `file:${w.path}`), cursor: 'pointer' },
         }),
       ),
-    ].filter(e => nodes.some(n => n.id === e.source) && nodes.some(n => n.id === e.target));
-    return { nodes, edges, nextPulseEnd };
-  }, [layout, moved, sizes, live, goal.agents, focus, selected, pair, file, tickN]);
+    ].filter(e => ids.has(e.source) && ids.has(e.target));
+    return { edges, nextPulseEnd };
+  }, [layout, idKey, pos, related, waits, pair, tickN]);
+  // Only the lines with something new redraw on an event.
+  const edges = useSteadyEdges(builtEdges);
 
   // Pulses go once they've arrived.
   useEffect(() => {
@@ -515,10 +553,13 @@ function GraphInner({ goal, events, selected, agentPanel, file, onSelect, onFile
   // Dragging moves a card for good (in this browser); the rest keep their places in the layout.
   const onNodesChange = (changes: NodeChange[]) => {
     const measured = changes.filter(c => c.type === 'dimensions' && c.dimensions);
+    // A card measured again at the size it had (scrolled back into view) changes nothing: the graph isn't redrawn for it.
     if (measured.length)
       setSizes(s => {
+        const fresh = measured.filter(c => c.type === 'dimensions' && c.dimensions && (s[c.id]?.width !== c.dimensions.width || s[c.id]?.height !== c.dimensions.height));
+        if (!fresh.length) return s;
         const n = { ...s };
-        for (const c of measured) if (c.type === 'dimensions' && c.dimensions) n[c.id] = c.dimensions;
+        for (const c of fresh) if (c.type === 'dimensions' && c.dimensions) n[c.id] = c.dimensions;
         return n;
       });
     const moves = changes.filter(c => c.type === 'position' && c.position);
@@ -604,6 +645,7 @@ function GraphInner({ goal, events, selected, agentPanel, file, onSelect, onFile
             }}
             onPaneClick={() => setPair(undefined)}
             onNodesChange={onNodesChange}
+            onlyRenderVisibleElements
             fitView
             fitViewOptions={{ padding: 0.2, maxZoom: 1 }}
             minZoom={0.2}

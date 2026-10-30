@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
-import { applyNodeChanges, Background, Controls, getViewportForBounds, Handle, MarkerType, NodeResizeControl, Position, ReactFlow, ReactFlowProvider, useReactFlow, type Edge, type Node, type NodeChange, type NodeProps } from '@xyflow/react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { applyNodeChanges, Background, Controls, getViewportForBounds, Handle, MarkerType, NodeResizeControl, Position, ReactFlow, ReactFlowProvider, useReactFlow, useUpdateNodeInternals, type Edge, type Node, type NodeChange, type NodeProps } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import type { ElkExtendedEdge, ElkNode } from 'elkjs/lib/elk-api';
 import {
@@ -8,6 +8,7 @@ import {
 } from '../codeData.ts';
 import { areaLabel } from '../designData.ts';
 import { DocTip } from '../components/DocTip.tsx';
+import { useFar, useSteadyEdges } from '../flowNodes.ts';
 import type { SystemsNav } from './Systems.tsx';
 
 /**
@@ -67,6 +68,8 @@ const ROW = 22;
 const ROWS_MAX = 10;
 const BLOB_ROWS = 6;
 const DENSE = 40;
+/** Past this many lines the canvas is a tangle: the strongest few per card are drawn, and all of the card hovered or selected. */
+const MANY_LINES = 300;
 /** Fitting leaves room for the bars floating over the canvas. */
 const FIT_PAD = { top: '100px', bottom: '56px', left: '24px', right: '24px' } as const;
 
@@ -189,9 +192,15 @@ export function SystemsCanvas(p: CanvasProps) {
 }
 
 function CanvasInner(p: CanvasProps) {
-  const { ix, t, canvas, nav, chg, titles, onNav, onAct } = p;
+  const { ix, t, canvas, nav, chg, titles } = p;
+  // Cards are built again only when what they show changes: what they do goes to the latest handlers.
+  const handlers = useRef({ onNav: p.onNav, onAct: p.onAct });
+  handlers.current = { onNav: p.onNav, onAct: p.onAct };
+  const onNav = (n: Partial<SystemsNav>) => handlers.current.onNav(n);
+  const onAct = (a: Act, u: string) => handlers.current.onAct(a, u);
   const [hoverPin, setHoverPin] = useState<{ unit: string; pin: string }>();
   const [hoverEdge, setHoverEdge] = useState<string>();
+  const [hoverCard, setHoverCard] = useState<string>();
   const [moreOpen, setMoreOpen] = useState<Set<string>>(new Set());
   const [sizes, setSize] = useSizes(p.goal);
   const [menu, setMenu] = useState<{ unit: string; x: number; y: number }>();
@@ -206,7 +215,19 @@ function CanvasInner(p: CanvasProps) {
     return () => (window.removeEventListener('pointerdown', close, true), window.removeEventListener('wheel', close, true), window.removeEventListener('keydown', esc, true));
   }, [menu]);
   const selFn = nav.sel && ix.fn.has(nav.sel) ? nav.sel : undefined;
-  const restOf = (id: string) => canvas.units.find(u => u.id === id)?.classes.length ?? 0;
+  const unitById = useMemo(() => new Map(canvas.units.map(u => [u.id, u])), [canvas]);
+  /** Each card's links with the others, summed: why it's on the canvas. */
+  const linksWith = useMemo(() => {
+    const out = new Map<string, Map<string, number>>();
+    const add = (a: string, b: string, n: number) => {
+      const m = out.get(a) ?? new Map<string, number>();
+      m.set(b, (m.get(b) ?? 0) + n);
+      out.set(a, m);
+    };
+    for (const w of canvas.wires) if (w.from !== w.to) (add(w.from, w.to, w.edges.length), add(w.to, w.from, w.edges.length));
+    return out;
+  }, [canvas]);
+  const restOf = (id: string) => unitById.get(id)?.classes.length ?? 0;
   const unitName = (id: string): string =>
     id === 'engine' ? 'Engine' : isRestId(id) ? `rest of ${unitName(id.slice(5))} (${restOf(id)})` : isAreaId(id) ? titles.get(id.slice(5)) ?? areaLabel(id.slice(5)) : isGroupId(id) ? t.group.get(id)?.name ?? id : ix.cls.get(id)?.name ?? id;
   /** What a card says about itself: its kind, name, path, a line of what it does, its badges, when the engine calls it. */
@@ -249,7 +270,7 @@ function CanvasInner(p: CanvasProps) {
   /** The frames a card sits in, innermost first. */
   const framesOf = (u: Unit) => {
     const out: string[] = [];
-    for (let x = u.parent; x; x = canvas.units.find(y => y.id === x)?.parent) out.push(x);
+    for (let x = u.parent; x; x = unitById.get(x)?.parent) out.push(x);
     return out;
   };
   /** Frames with a card pinned somewhere inside. */
@@ -302,20 +323,18 @@ function CanvasInner(p: CanvasProps) {
       more.set(u, rows.length - keep.length);
     }
     const rowShown = (u: string, pin: string) => !!fnRows.get(u)?.some(r => r.pin === pin);
-    const keepFn = hoverPin && focusCards.has(hoverPin.unit) ? hoverPin.pin : selFn;
-    // Too many lines to follow: they go to the card, but for the function hovered or looked at.
+    // Too many lines to follow: they go to the card, but for the function hovered or looked at (drawn apart from the model, so hovering redraws only lines).
     // The layout uses the lines without those, so hovering never moves a card.
     const base = collapseWires(canvas.wires, focusCards, rowShown);
     const dense = base.length > DENSE;
     const shown = dense ? () => false : rowShown;
-    const wires = collapseWires(canvas.wires, focusCards, shown, keepFn);
     const layoutWires = dense ? collapseWires(canvas.wires, focusCards, shown) : base;
-    // Other cards' rows: the cards at the other end of their lines.
+    // Other cards' rows: the cards at the other end of their lines (the same sums whichever function's lines are kept).
     const nearRows = new Map<string, Row[]>();
     for (const u of canvas.units) {
       if (u.role !== 'near') continue;
       const by = new Map<string, Row>();
-      for (const w of wires) {
+      for (const w of layoutWires) {
         if (w.from === u.id) {
           const r = by.get(w.to) ?? { pin: w.to, label: unitName(w.to), in: 0, out: 0 };
           r.out += w.edges.length;
@@ -349,26 +368,23 @@ function CanvasInner(p: CanvasProps) {
     // The engine starts the main scene and the autoloads: on the whole-game view, and at the head of a route.
     const roots = overview ? canvas.units.filter(u => u.classes.some(c => ix.cls.get(c)?.main || ix.cls.get(c)?.kind === 'autoload')).map(u => u.id) : [];
     const engineOn = roots.length > 0 || routeUnits.length > 0;
-    const lines = (ws: Wire[]) => ws.map(w => ({ id: w.key, source: w.from, sourceHandle: `o:${w.fromPin}`, target: w.to, targetHandle: `i:${w.toPin}` }));
+    const lines = (ws: Wire[]) => ws.map(w => ({ id: w.key, source: w.from, sourceHandle: `o:${w.fromPin}`, target: w.to, targetHandle: `i:${w.toPin}`, data: { n: w.edges.length } }));
     const layoutEdges: Edge[] = [...lines(merge(layoutWires)), ...(roots.length && engineOn ? roots.map(r => ({ id: `engine->${r}`, source: 'engine', sourceHandle: 'o:*', target: r, targetHandle: 'i:*' })) : [])];
     if (routeUnits.length) layoutEdges.push({ id: 'engine->route', source: 'engine', sourceHandle: 'o:*', target: routeUnits.find(u => units.has(u)) ?? '', targetHandle: 'i:*' });
-    return { units, focusCards, fnRows, nearRows, more, wires: merge(wires), layoutEdges, dense, roots, engineOn, overview };
-  }, [canvas, ix, chg, selFn, hoverPin, moreOpen, sizes, routeUnits, titles, t, pins, tuck]); // eslint-disable-line react-hooks/exhaustive-deps
+    return { units, focusCards, fnRows, nearRows, more, merge, shown, layoutEdges, dense, roots, engineOn, overview };
+  }, [canvas, ix, chg, selFn, moreOpen, sizes, routeUnits, titles, t, pins, tuck]); // eslint-disable-line react-hooks/exhaustive-deps
+  const keepFn = hoverPin && model.focusCards.has(hoverPin.unit) ? hoverPin.pin : selFn;
+  const wires = useMemo(() => model.merge(collapseWires(canvas.wires, model.focusCards, model.shown, keepFn)), [model, canvas, keepFn]);
 
   /** Why a card is on the canvas. */
   const why = (u: Unit): string => {
     if (isRestId(u.id)) return `The cards in ${unitName(u.id.slice(5))} you didn't pin, folded together. Click to bring them back.`;
     if (u.role === 'focus' || u.role === 'frame') return p.focus.includes(u.id) ? "You're looking at it." : 'The scope changed it.';
-    const holder = u.parent ? canvas.units.find(x => x.id === u.parent) : undefined;
+    const holder = u.parent ? unitById.get(u.parent) : undefined;
     if (holder?.role === 'frame') return `Part of ${unitName(holder.id)}, which you're looking at.`;
     if (u.role === 'open') return 'Opened in place: its cards are inside it.';
     if (!holder && !model.focusCards.size && !canvas.units.some(x => x.role === 'frame')) return 'Part of the whole game.';
-    const with_ = new Map<string, number>();
-    for (const w of canvas.wires) {
-      if (w.from === u.id && w.to !== u.id) with_.set(w.to, (with_.get(w.to) ?? 0) + w.edges.length);
-      if (w.to === u.id && w.from !== u.id) with_.set(w.from, (with_.get(w.from) ?? 0) + w.edges.length);
-    }
-    const ws = [...with_].sort((a, b) => b[1] - a[1]);
+    const ws = [...(linksWith.get(u.id) ?? [])].sort((a, b) => b[1] - a[1]);
     if (holder) return `Inside ${unitName(holder.id)}, which you opened.${ws.length ? ` Links with ${ws.slice(0, 3).map(([x, n]) => `${unitName(x)} (${n})`).join(', ')}.` : ''}`;
     if (ws.length) return `One step from ${ws.slice(0, 3).map(([x, n]) => `${unitName(x)} (${n} link${n === 1 ? '' : 's'})`).join(', ')}${ws.length > 3 ? ` and ${ws.length - 3} more` : ''}.`;
     if (nav.show?.some(a => u.classes.some(c => `area:${ix.cls.get(c)?.area}` === a))) return 'You drew it from the chips.';
@@ -448,20 +464,30 @@ function CanvasInner(p: CanvasProps) {
     return out;
   }, [canvas, model, nav.sel, nav.show, p.hl, p.lit, p.litFns, p.summaries, p.focus, sizes, routeUnits, ix, t, chg, titles, pins, tuck, pinnedIn]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // A tangle of lines: which are drawn without a card hovered or selected.
+  const many = wires.length > MANY_LINES;
+  const strongest = useMemo(
+    () => (many ? new Set([...wires].sort((a, b) => b.edges.length - a.edges.length).slice(0, Math.max(150, 3 * canvas.units.length)).map(w => w.key)) : undefined),
+    [many, wires, canvas],
+  );
+  const selUnit = nav.sel ? (ix.fn.has(nav.sel) ? canvas.where.get(ix.fn.get(nav.sel)!.cls) : nav.sel) : undefined;
+  const lineCard = many ? hoverCard ?? selUnit : undefined;
+
   // Lines, and the route from the engine drawn over them.
   const edges = useMemo(() => {
     const out: Edge[] = [];
     const added = new Set(chg?.added.map(edgeKey));
     const order = new Map<string, number>();
     if (selFn) (ix.out.get(selFn) ?? []).forEach((e, i) => !order.has(e.t) && order.set(e.t, i));
-    const few = model.wires.length <= 16;
+    const few = wires.length <= 16;
     const peeking = !!p.lit;
     const litUnits = p.lit ? new Set([...p.lit].map(c => canvas.where.get(c))) : undefined;
-    for (const w of model.wires) {
+    for (const w of wires) {
       const st = KIND_STYLE[w.kind];
       const isNew = w.edges.some(e => added.has(edgeKey(e)));
       const mine = !!selFn && (w.fromPin === selFn || w.toPin === selFn);
       const hovered = hoverEdge === w.key || (!!hoverPin && (w.fromPin === hoverPin.pin || w.toPin === hoverPin.pin));
+      if (strongest && !strongest.has(w.key) && !isNew && !mine && !hovered && w.from !== lineCard && w.to !== lineCard) continue;
       const n = w.edges.length;
       const names = w.kind === 'signal' ? `⚡ ${w.names.slice(0, 2).join(', ')}${w.names.length > 2 ? '…' : ''}` : `${st.word} ${w.names.slice(0, 2).join(', ')}${w.names.length > 2 ? ` +${w.names.length - 2}` : ''}`;
       // The selected function's lines are numbered in the order its code reaches them.
@@ -487,7 +513,7 @@ function CanvasInner(p: CanvasProps) {
       }
     }
     return out;
-  }, [model, chg, selFn, hoverEdge, hoverPin, routeUnits, ix, p.lit, p.peekLocked, canvas]);
+  }, [model, wires, strongest, lineCard, chg, selFn, hoverEdge, hoverPin, routeUnits, ix, p.lit, p.peekLocked, canvas]);
 
   const lay = useElkLayout(p.goal, cards, model.layoutEdges);
   // A frame's lines leave and enter by the side facing the card at the other end.
@@ -503,6 +529,8 @@ function CanvasInner(p: CanvasProps) {
       return out;
     });
   }, [edges, lay.nodes]);
+  // Hovering a function redraws only the lines it lights.
+  const steadyEdges = useSteadyEdges(routed);
   const flow = useReactFlow();
   const canvasRef = useRef<HTMLDivElement>(null);
   // The view moves when what's looked at changes; opening, splitting or hiding a card leaves it where it is.
@@ -591,7 +619,7 @@ function CanvasInner(p: CanvasProps) {
       <div ref={canvasRef} className={`sys-canvas${lay.dragging ? '' : ' anim'}${p.peekLocked ? ' locked' : ''}`}>
         <ReactFlow
           nodes={lay.nodes}
-          edges={routed}
+          edges={steadyEdges}
           nodeTypes={NODE_TYPES}
           onNodesChange={lay.onNodesChange}
           onNodeDragStart={lay.onDragStart}
@@ -612,10 +640,13 @@ function CanvasInner(p: CanvasProps) {
           }}
           onEdgeMouseEnter={(_, e) => setHoverEdge(e.id)}
           onEdgeMouseLeave={() => setHoverEdge(undefined)}
+          onNodeMouseEnter={(_, n) => many && setHoverCard(n.id)}
+          onNodeMouseLeave={() => setHoverCard(undefined)}
           onPaneClick={() => onNav({ sel: undefined, link: undefined })}
           minZoom={0.08}
           proOptions={{ hideAttribution: true }}
           nodesConnectable={false}
+          onlyRenderVisibleElements
           fitView
           fitViewOptions={{ padding: FIT_PAD, maxZoom: 1 }}
         >
@@ -639,6 +670,7 @@ function CanvasInner(p: CanvasProps) {
               </button>
             ))}
             {model.dense && <span className="muted small">many lines: hover a function for its own</span>}
+            {many && <span className="muted small" title={`${wires.length} lines: the strongest are drawn, and all of the card you hover or select`}>many lines: hover a card for all of its own</span>}
             <span className="sys-legend small" aria-label="Colours">
               <span><i className="lg new" />new</span>
               <span><i className="lg chg" />changed</span>
@@ -792,8 +824,18 @@ function CardButtons({ d }: { d: CardData }) {
   );
 }
 
-function Card({ data: d }: NodeProps<Node<CardData>>) {
-  const cls = ['sys-node', d.role, d.kind, d.on && 'on', d.hl && 'hl', d.route && 'route', d.isNew ? 'added' : d.changed > 0 && 'changed', d.peek && `peek-${d.peek}`, d.w >= 320 && 'wide', d.pinned && 'pinned', isRestId(d.unit) && 'rest'].filter(Boolean).join(' ');
+function Card({ id, data: d }: NodeProps<Node<CardData>>) {
+  const far = useFar();
+  // Its pins sit a little differently near and far: measured again when it changes, so the lines meet them.
+  const remeasure = useUpdateNodeInternals();
+  const wasFar = useRef(far);
+  useLayoutEffect(() => {
+    if (wasFar.current === far) return;
+    wasFar.current = far;
+    remeasure(id);
+  }, [far, id, remeasure]);
+  const cls = ['sys-node', d.role, d.kind, d.on && 'on', d.hl && 'hl', d.route && 'route', d.isNew ? 'added' : d.changed > 0 && 'changed', d.peek && `peek-${d.peek}`, d.w >= 320 && 'wide', d.pinned && 'pinned', isRestId(d.unit) && 'rest', far && 'far'].filter(Boolean).join(' ');
+  if (far) return <FarCard d={d} cls={cls} />;
   return (
     <>
     <div className={cls} title={d.doc === undefined ? d.why : undefined}>
@@ -909,6 +951,34 @@ function Card({ data: d }: NodeProps<Node<CardData>>) {
   );
 }
 
+/**
+ * A card zoomed out: its name large enough to read, and its pins where they always are (the lines
+ * stay on them); the small print, buttons and tips that can't be read from here aren't drawn.
+ */
+function FarCard({ d, cls }: { d: CardData; cls: string }) {
+  return (
+    <div className={cls} title={d.title}>
+      <Handle type="target" position={Position.Left} id="i:*" style={{ top: headerY }} />
+      <Handle type="source" position={Position.Right} id="o:*" style={{ top: headerY }} />
+      <div className="far-head" style={{ height: headHeight(d) - 8 }}>
+        <span className="node-title">
+          {d.kind === 'group' ? '▣ ' : d.kind === 'area' ? '▤ ' : d.kind === 'engine' ? '⏵ ' : ''}
+          {d.title}
+        </span>
+        {d.changed > 0 && <span className="pill chg">~{d.changed}</span>}
+      </div>
+      <div className="node-rows">
+        {d.rows.map(r => (
+          <div key={r.pin} className={`node-row${r.on ? ' on' : ''}${r.mark ? ` ${r.mark}` : ''}${r.peek ? ' peek' : ''}`}>
+            <Handle type="target" position={Position.Left} id={`i:${r.pin}`} className={r.in ? 'pin' : 'pin off'} />
+            <Handle type="source" position={Position.Right} id={`o:${r.pin}`} className={r.out ? 'pin' : 'pin off'} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Frame({ data: d }: NodeProps<Node<FrameData>>) {
   return (
     <div className={`sys-frame${d.on ? ' on' : ''}${d.open ? ' open' : ''}`}>
@@ -957,10 +1027,40 @@ const NODE_TYPES = { card: Card, frame: Frame };
 type Placed = { x: number; y: number; w?: number; h?: number };
 type CardSpec = { id: string; parent?: string; frame?: FrameData; card?: CardData };
 
-let elkP: Promise<{ layout: (g: ElkNode) => Promise<ElkNode> }> | undefined;
-/** ELK, loaded the first time the canvas lays something out. */
-function elk() {
-  elkP ??= import('elkjs/lib/elk.bundled.js').then(m => new m.default());
+type Elk = { layout: (g: ElkNode) => Promise<ElkNode> };
+let elkP: Promise<Elk> | undefined;
+/** Past this many lines, the layout is made from the strongest (see elkGraph). */
+const LAYOUT_LINES = 120;
+const elkOnPage = () => import('elkjs/lib/elk.bundled.js').then((m): Elk => new m.default());
+/**
+ * ELK, loaded the first time the canvas lays something out. It works in a worker, so laying out a
+ * crowded canvas doesn't stop the page; where a worker can't start, it works on the page.
+ */
+function elk(): Promise<Elk> {
+  elkP ??= Promise.all([import('elkjs/lib/elk-api.js'), import('elkjs/lib/elk-worker.min.js?url')])
+    .then(([api, url]): Elk => {
+      let dead = false;
+      let broke: (e: unknown) => void = () => {};
+      const failed = new Promise<never>((_, no) => (broke = e => ((dead = true), no(e))));
+      failed.catch(() => {});
+      const inWorker = new api.default({
+        workerFactory: () => {
+          const w = new Worker(url.default);
+          w.addEventListener('error', e => broke(e));
+          return w;
+        },
+      });
+      return {
+        layout: g =>
+          Promise.race([inWorker.layout(g), failed]).catch(err => {
+            if (!dead) throw err;
+            console.warn('Systems layout: on the page, not in a worker', err);
+            elkP = elkOnPage();
+            return elkP.then(e => e.layout(g));
+          }),
+      };
+    })
+    .catch(() => elkOnPage());
   return elkP;
 }
 
@@ -1006,9 +1106,21 @@ function elkGraph(cards: CardSpec[], edges: Edge[]): ElkNode {
   }
   for (const [p, list] of kids) if (p && nodes.has(p)) nodes.get(p)!.children = list;
   const ports = new Set([...nodes.values()].flatMap(n => (n.ports ?? []).map(x => x.id)));
-  const elkEdges: ElkExtendedEdge[] = edges
-    .map(e => ({ id: e.id, sources: [`${e.source}|${e.sourceHandle}`], targets: [`${e.target}|${e.targetHandle}`] }))
-    .filter(e => ports.has(e.sources[0]) && ports.has(e.targets[0]));
+  let laid = edges.filter(e => ports.has(`${e.source}|${e.sourceHandle}`) && ports.has(`${e.target}|${e.targetHandle}`));
+  // Many lines take ELK's careful layout seconds to minutes: it places the cards by the strongest
+  // line between each two, a few per card, with its quicker settings. Every line is still drawn.
+  const crowded = laid.length > LAYOUT_LINES;
+  if (crowded) {
+    const weight = (e: Edge) => Number(e.data?.n ?? 1);
+    const best = new Map<string, Edge>();
+    for (const e of laid) {
+      const k = `${e.source}>${e.target}`;
+      const b = best.get(k);
+      if (!b || weight(e) > weight(b)) best.set(k, e);
+    }
+    laid = [...best.values()].sort((a, b) => weight(b) - weight(a)).slice(0, Math.max(LAYOUT_LINES, 3 * cards.length));
+  }
+  const elkEdges: ElkExtendedEdge[] = laid.map(e => ({ id: e.id, sources: [`${e.source}|${e.sourceHandle}`], targets: [`${e.target}|${e.targetHandle}`] }));
   return {
     id: 'root',
     layoutOptions: {
@@ -1018,8 +1130,8 @@ function elkGraph(cards: CardSpec[], edges: Edge[]): ElkNode {
       'elk.layered.spacing.nodeNodeBetweenLayers': '90',
       'elk.spacing.nodeNode': '26',
       'elk.spacing.componentComponent': '50',
-      'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX',
-      'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES',
+      'elk.layered.nodePlacement.strategy': crowded ? 'BRANDES_KOEPF' : 'NETWORK_SIMPLEX',
+      'elk.layered.considerModelOrder.strategy': crowded ? 'NONE' : 'NODES_AND_EDGES',
     },
     children: kids.get('') ?? [],
     edges: elkEdges,
@@ -1132,7 +1244,12 @@ function useElkLayout(goal: string, cards: CardSpec[], edges: Edge[]) {
     moved: Object.keys(moved.current[set] ?? {}).length > 0,
     onNodesChange: (chs: NodeChange[]) => {
       for (const c of chs) if (c.type === 'position' && c.position) moved.current[set] = { ...(moved.current[set] ?? {}), [c.id]: c.position };
-      setRf(ns => applyNodeChanges(chs, ns));
+      // A card measured again at the size it had (scrolled back into view) changes nothing.
+      setRf(ns => {
+        const was = new Map(ns.map(n => [n.id, n.measured]));
+        const real = chs.filter(c => c.type !== 'dimensions' || c.resizing !== undefined || !c.dimensions || was.get(c.id)?.width !== c.dimensions.width || was.get(c.id)?.height !== c.dimensions.height);
+        return real.length ? applyNodeChanges(real, ns) : ns;
+      });
     },
     onDragStart: () => setDragging(true),
     onDragStop: () => (setDragging(false), save()),

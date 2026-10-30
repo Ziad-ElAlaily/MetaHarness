@@ -11,8 +11,10 @@ export const modelLabel = (x: { model?: string; effort?: string | null }) => `${
 /** How the feed says what the gatekeeper decided. */
 export const GATE: Record<string, string> = { allow: 'gatekeeper allowed', deny: 'gatekeeper refused', ask: 'gatekeeper asked you about' };
 
+// One formatter for every clock: making one per call is most of the cost of a long list of times.
+const CLOCK = new Intl.DateTimeFormat([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
 export function clock(ts: string | number): string {
-  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+  return CLOCK.format(new Date(ts));
 }
 
 /** MetaHarness's own tools: their calls already show as status lines, messages and done notes. */

@@ -1048,6 +1048,11 @@ details.more { display: grid; gap: 6px; }
 .node-text { height: 30px; line-height: 15px; padding: 0 10px; font-size: 11.5px; color: var(--text-2); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .node-chips { height: 22px; display: flex; gap: 4px; align-items: center; padding: 0 10px; overflow: hidden; }
 .node-rows { border-top: 1px solid var(--line); }
+/* Zoomed out: a card's name, large enough to read from there, and nothing that can't be. */
+.sys-node.far { box-shadow: none; }
+.sys-node .far-head { display: flex; align-items: flex-start; gap: 6px; padding: 0 10px; overflow: hidden; }
+.sys-node .far-head .node-title { font-size: 26px; font-weight: 600; line-height: 1.15; overflow-wrap: anywhere; }
+.sys-node.far .node-row { cursor: default; }
 .sys-node.engine .node-rows { border: 0; }
 .node-row { position: relative; height: 22px; display: flex; align-items: center; gap: 6px; padding: 0 12px; font-size: 12px; cursor: pointer; }
 .node-row:hover { background: var(--panel-2); }
@@ -1168,8 +1173,8 @@ details.more { display: grid; gap: 6px; }
 .sys-float { position: absolute; left: 8px; right: 8px; z-index: 5; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; pointer-events: none; }
 .sys-float.top { top: 8px; }
 .sys-float.bottom { bottom: 8px; right: 60px; }
-.sys-float > * { pointer-events: auto; max-width: 100%; box-sizing: border-box; border: 1px solid var(--line) !important; border-radius: 10px; background: color-mix(in srgb, var(--panel) 90%, transparent); backdrop-filter: blur(4px); box-shadow: var(--shadow); }
-.sys-float .sys-route { background: color-mix(in srgb, var(--accent) 8%, color-mix(in srgb, var(--panel) 90%, transparent)); }
+.sys-float > * { pointer-events: auto; max-width: 100%; box-sizing: border-box; border: 1px solid var(--line) !important; border-radius: 10px; background: color-mix(in srgb, var(--panel) 96%, transparent); box-shadow: var(--shadow); }
+.sys-float .sys-route { background: color-mix(in srgb, var(--accent) 8%, color-mix(in srgb, var(--panel) 96%, transparent)); }
 .sys-float.bottom .sys-chips { width: 100%; }
 .help-dot { display: inline-grid; place-items: center; width: 16px; height: 16px; border: 1px solid var(--line-strong); border-radius: 50%; font-size: 10.5px; font-weight: 700; cursor: help; flex: none; }
 /* Design: the scope bar carries the lens's tools; the lanes start short and can be dragged taller. */

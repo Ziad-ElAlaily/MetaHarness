@@ -1,9 +1,15 @@
 import type { DesignArea, DesignSnapshot, MhEvent } from './types.ts';
 
-/** The deepest area holding a path ('' holds everything). */
+const areaCache = new WeakMap<DesignArea[], Map<string, string | undefined>>();
+
+/** The deepest area holding a path ('' holds everything). Found once per path and list of areas: the same paths come up event after event. */
 export function areaOf(areas: DesignArea[], path: string): string | undefined {
+  let known = areaCache.get(areas);
+  if (!known) areaCache.set(areas, (known = new Map()));
+  if (known.has(path)) return known.get(path);
   let best: DesignArea | undefined;
   for (const a of areas) if ((a.path === '' || path === a.path || path.startsWith(a.path + '/')) && (!best || a.path.length > best.path.length)) best = a;
+  known.set(path, best?.path);
   return best?.path;
 }
 

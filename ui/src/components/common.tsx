@@ -1,4 +1,4 @@
-import { Component, createContext, Fragment, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { Component, createContext, Fragment, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type { Agent } from '../types.ts';
 import { modelLabel } from '../format.ts';
 import { fileAt, withFileLinks, type FileLinks } from '../fileLinks.tsx';
@@ -52,6 +52,38 @@ export function useNow(ms = 1000): number {
     return () => clearInterval(t);
   }, [ms]);
   return now;
+}
+
+type Clock = { now: number; subs: Set<() => void>; timer?: number; subscribe: (cb: () => void) => () => void };
+const clocks = new Map<number, Clock>();
+
+/**
+ * The time, refreshed every `ms` by one timer shared by everything showing it, so a crowd of
+ * cards ticks in one pass. Keep what uses it small: only it redraws.
+ */
+export function useClock(ms = 1000): number {
+  let c = clocks.get(ms);
+  if (!c) {
+    const clock: Clock = {
+      now: Date.now(), subs: new Set(),
+      subscribe: cb => {
+        clock.subs.add(cb);
+        if (clock.timer === undefined) {
+          clock.now = Date.now();
+          clock.timer = window.setInterval(() => {
+            clock.now = Date.now();
+            for (const s of clock.subs) s();
+          }, ms);
+        }
+        return () => {
+          clock.subs.delete(cb);
+          if (!clock.subs.size) (clearInterval(clock.timer), (clock.timer = undefined));
+        };
+      },
+    };
+    clocks.set(ms, (c = clock));
+  }
+  return useSyncExternalStore(c.subscribe, () => c.now);
 }
 
 const left = (ms: number) => (ms >= 3_600_000 ? `${Math.floor(ms / 3_600_000)}h${String(Math.floor((ms % 3_600_000) / 60_000)).padStart(2, '0')}` : ms >= 120_000 ? `${Math.round(ms / 60_000)}m` : `${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, '0')}`);

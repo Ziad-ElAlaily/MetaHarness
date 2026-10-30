@@ -102,6 +102,8 @@ function useGraphs(goal: string, to: string | undefined, from: string | undefine
   return { ...last.current, loading: !ready && !after.error, error: last.current.after ? undefined : after.error };
 }
 
+const NONE: string[] = [];
+
 type Kinds = Record<'call' | 'signal' | 'new' | 'state', boolean>;
 const KIND_KEY = 'mh.systems.kinds';
 const DEFAULT_KINDS: Kinds = { call: true, signal: true, new: true, state: false };
@@ -210,6 +212,10 @@ export default function Systems({ goal, view, snap, nav, onNav, lens, scopeBar, 
     [ix, tree, links, rails, focus, nav.open, nav.pins, nav.tuck, nav.expand, nav.fold, nav.show, nav.hide, lkKey, meet], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const route = useMemo(() => (ix && tree && nav.route !== false && focus.length ? routeTo(ix, tree, focus, chg) : []), [ix, tree, focus, chg, nav.route]);
+  // A heading naming more than its path (`## scripts/core/ + scripts/main.gd`) leaves a path for a title: the folder's name reads better.
+  // Kept between renders: the canvas redraws every card when these change.
+  const titles = useMemo(() => new Map(snap.map.areas.map(a => [a.path, a.title.includes('/') ? a.path.split('/').pop() || a.path : a.title])), [snap]);
+  const summaries = useMemo(() => new Map(snap.map.areas.map(a => [a.path, a.summary])), [snap]);
   const hist = useRef<SystemsNav[]>([]);
   const navRef = useRef(nav);
   navRef.current = nav;
@@ -356,9 +362,6 @@ export default function Systems({ goal, view, snap, nav, onNav, lens, scopeBar, 
   if (!ix.g.classes.length) {
     return withToolbar(toolbar, <div className="empty">No code here that MetaHarness can follow yet. The Systems lens reads GDScript for now (a language pack with a code reader); the Areas lens still shows every file.</div>);
   }
-  // A heading naming more than its path (`## scripts/core/ + scripts/main.gd`) leaves a path for a title: the folder's name reads better.
-  const titles = new Map(snap.map.areas.map(a => [a.path, a.title.includes('/') ? a.path.split('/').pop() || a.path : a.title]));
-  const summaries = new Map(snap.map.areas.map(a => [a.path, a.summary]));
   const sel = nav.sel;
   const un = (id: string) => unitName(ix, tree, titles, id);
   // Diffs in the panel: over the scope, and in the commit kept lit.
@@ -409,7 +412,7 @@ export default function Systems({ goal, view, snap, nav, onNav, lens, scopeBar, 
             <LinkView goal={goal.id} ix={ix} t={tree} links={links} link={nav.link} pick={nav.pick} sel={nav.sel} chg={chg} name={un} onNav={set} />
           ) : (
             <SystemsCanvas
-              goal={goal.id} ix={ix} t={tree} canvas={canvas} nav={nav} chg={chg} titles={titles} summaries={summaries} focus={nav.focus ?? []} changeFocus={changeFocus} changesOn={changesOn}
+              goal={goal.id} ix={ix} t={tree} canvas={canvas} nav={nav} chg={chg} titles={titles} summaries={summaries} focus={nav.focus ?? NONE} changeFocus={changeFocus} changesOn={changesOn}
               scopeTitle={view.scope?.title} route={route} hl={hl} lit={lit} litFns={litFns} peekLocked={locked} canBack={hist.current.length > 0} onBack={back} onNav={set} onAct={act} onChanges={on => go({ changes: on })}
             />
           )}
