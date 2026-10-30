@@ -44,6 +44,8 @@ const HELP = `mh: run a team of AI agents from different providers on one goal
   mh clean [<goal>] [--force]        Worktrees and merged branches go when a goal's lead finishes; this
                                      retries for finished goals. What was kept (uncommitted or
                                      unmerged work) goes only with a goal and --force
+  mh ps [--end]                      Processes agents started that still run; strays (their agent's
+                                     session is over) end by themselves, or now with --end
   mh approve <item> [<note>]         Approve a permission request or a decision from your Inbox
   mh deny <item> [<reason>]          Deny it; the agent gets the reason (for a decision: what to change)
   mh dismiss <item>                  Clear an Inbox item
@@ -114,7 +116,7 @@ function parse(argv: string[]) {
     if (a.startsWith('--')) {
       const key = a.slice(2);
       const next = argv[i + 1];
-      if (next !== undefined && !next.startsWith('--') && !['fake', 'urgent', 'no-resume', 'force', 'worktree', 'trust'].includes(key)) {
+      if (next !== undefined && !next.startsWith('--') && !['fake', 'urgent', 'no-resume', 'force', 'worktree', 'trust', 'end'].includes(key)) {
         opt[key] = next;
         i++;
       } else opt[key] = true;
@@ -248,9 +250,12 @@ async function main(): Promise<void> {
       const d = new Daemon({ home: HOME, adapters, harnessOverride: fake ? 'fake' : undefined });
       await startServer(d, PORT, token(true)).catch((e: Error) => die(`Couldn't listen on ${BASE}: ${e.message}`));
       if (!fake) d.startLimitChecks();
+      // Listening means no other daemon is using this home, so what its goals' agents left running is nobody's now.
+      const leftovers = d.endLeftovers();
       console.log(`MetaHarness daemon on ${BASE}${fake ? ', running scripted agents' : ''}. Data in ${HOME}.`);
       const projects = d.listProjects().filter(p => p.opened);
       console.log(projects.length ? `Projects: ${projects.map(p => p.dir).join(', ')}` : 'No projects yet: mh project <folder>, or Open folder in the app.');
+      if (leftovers) console.log(`Ended ${leftovers} ${leftovers === 1 ? 'process' : 'processes'} agents left running before the last daemon stopped.`);
       const { guardProblem } = await import('./guard.ts');
       const guard = guardProblem();
       if (guard) console.log(`Warning: ${guard}. Git 2.28 or newer keeps agents from deleting branches.`);
@@ -344,6 +349,18 @@ async function main(): Promise<void> {
         for (const k of g.kept) console.log(`  kept ${k}`);
       }
       if (r.results.some((g: { kept: string[] }) => g.kept.length) && opt.force !== true) console.log('Add --force to remove what was kept too.');
+      return;
+    }
+    case 'ps': {
+      const r = await command({ cmd: 'goal.procs', end: opt.end === true });
+      if (!r.procs.length) return void console.log('No processes from agents are running.');
+      for (const [goal, procs] of Map.groupBy(r.procs as { pid: number; goal: string; agent: string; command: string; request: string; stray: boolean }[], p => p.goal)) {
+        console.log(`Goal ${goal} (${procs[0].request.replace(/\s+/g, ' ').slice(0, 50)}):`);
+        for (const p of procs) console.log(`  ${String(p.pid).padStart(7)}  ${(p.agent || '?').padEnd(15)}${p.stray ? 'stray  ' : '       '}${p.command.slice(0, 90)}`);
+      }
+      const strays = r.procs.filter((p: { stray: boolean }) => p.stray).length;
+      if (r.ended) console.log(`Ended ${r.ended} stray ${r.ended === 1 ? 'process' : 'processes'}.`);
+      else if (strays) console.log(`${strays} ${strays === 1 ? 'is a stray' : 'are strays'}: mh ps --end ends ${strays === 1 ? 'it' : 'them'}.`);
       return;
     }
     case 'pause':

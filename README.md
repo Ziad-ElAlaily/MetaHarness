@@ -83,6 +83,7 @@ node src/cli.ts approve <id>   # answer a permission request or a decision liste
 node src/cli.ts pause impl-1   # stop after its current step; mh resume impl-1 lets it go on
 node src/cli.ts ui             # the web app: goals, what needs you, the team's story, files, setup
 node src/cli.ts clean <goal> --force   # remove worktrees or branches kept for unsaved work
+node src/cli.ts ps             # processes agents started that still run; --end ends the strays
 ```
 
 Each project reads roles from its own `.metaharness/` folder, on top of your personal

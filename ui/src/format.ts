@@ -50,6 +50,7 @@ export function eventText(e: MhEvent): string {
     case 'goal.resumed': return 'Goal resumed';
     case 'goal.recovered': return `Picked up after a daemon restart${d.resumed?.length ? `: ${d.resumed.join(', ')} continue` : ''}`;
     case 'goal.cleaned': return `Cleaned up: ${d.removed.length} worktree(s) removed, ${d.deleted.length} branch(es) deleted${d.kept.length ? `, ${d.kept.length} kept` : ''}`;
+    case 'procs.ended': return `Ended ${d.procs.length} process(es) ${d.reason === 'left by the last daemon' ? 'the last daemon left running' : 'left running'}: ${oneLine(d.procs.map((p: { command: string }) => p.command).join('; '), 300)}`;
     case 'agent.spawned': return `Spawned by ${e.parent === 'human' ? 'you' : e.parent} as ${d.role} (${d.harness} · ${modelLabel(d)})${d.quick ? ', quick helper' : ''}${d.branch ? ` on ${d.branch}` : ''}`;
     case 'agent.state': return `is ${STATE_LABEL[d.state as AgentState] ?? d.state}`;
     case 'agent.status': return `status: ${oneLine(d.text)}`;
@@ -135,7 +136,7 @@ export function eventKind(e: MhEvent): 'say' | 'tool' | 'message' | 'git' | 'sha
 export function importance(e: MhEvent): 'key' | 'minor' | 'hidden' {
   if (isOwnTool(e)) return 'hidden';
   switch (e.type) {
-    case 'goal.started': case 'goal.ended': case 'goal.paused': case 'goal.resumed': case 'goal.recovered': case 'goal.cleaned':
+    case 'goal.started': case 'goal.ended': case 'goal.paused': case 'goal.resumed': case 'goal.recovered': case 'goal.cleaned': case 'procs.ended':
     case 'agent.spawned': case 'agent.done': case 'agent.crashed': case 'agent.ended': case 'agent.idle': case 'agent.moved': case 'agent.limited':
     case 'agent.context_handoff': case 'goal.stalled':
     case 'message.sent': case 'git.commit': case 'git.merge': case 'git.conflict': case 'git.conflict_resolved': case 'shared.clash': case 'inbox.resolved':

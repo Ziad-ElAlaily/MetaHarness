@@ -1,9 +1,12 @@
 import { execFileSync, spawn, type ChildProcess, type ChildProcessWithoutNullStreams, type SpawnOptions } from 'node:child_process';
+import { readdirSync, readFileSync } from 'node:fs';
 
 /**
  * Harness CLIs and what they start (shells, dev servers, MCP servers) as one tree each. Each CLI
  * runs in a process group of its own, so ending it ends everything it started, even what
- * outlived it; and whatever is still running when the daemon exits goes with it.
+ * outlived it; and whatever is still running when the daemon exits goes with it. What left the
+ * group and the tree (setsid, a double fork) is found by the MH_GOAL its environment still has
+ * (tagged).
  */
 const live = new Set<ChildProcess>();
 const WINDOWS = process.platform === 'win32';
@@ -90,20 +93,28 @@ function signalGroup(proc: ChildProcess, sig: NodeJS.Signals): void {
   }
 }
 
+/** Each process's parent, from one `ps` listing; empty when ps isn't there. */
+function parents(): Map<number, number> {
+  const out = new Map<number, number>();
+  if (WINDOWS) return out;
+  let text: string;
+  try {
+    text = execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 });
+  } catch {
+    return out;
+  }
+  for (const line of text.split('\n')) {
+    const [c, p] = line.trim().split(/\s+/).map(Number);
+    if (c && p) out.set(c, p);
+  }
+  return out;
+}
+
 /** Every process under `pid`, from one `ps` listing; [] when ps isn't there. */
 export function descendants(pid?: number): number[] {
   if (!pid || WINDOWS) return [];
-  let out: string;
-  try {
-    out = execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 2000 });
-  } catch {
-    return [];
-  }
   const kids = new Map<number, number[]>();
-  for (const line of out.split('\n')) {
-    const [c, p] = line.trim().split(/\s+/).map(Number);
-    if (c && p) kids.set(p, [...(kids.get(p) ?? []), c]);
-  }
+  for (const [c, p] of parents()) kids.set(p, [...(kids.get(p) ?? []), c]);
   const found: number[] = [];
   const stack = [...(kids.get(pid) ?? [])];
   while (stack.length) {
@@ -112,4 +123,96 @@ export function descendants(pid?: number): number[] {
     stack.push(...(kids.get(c) ?? []));
   }
   return found;
+}
+
+/** A process an agent started, found by the MH_GOAL and MH_AGENT its harness passed down. */
+export interface Tagged {
+  pid: number;
+  goal: string;
+  agent: string;
+  command: string;
+}
+
+/**
+ * Every process whose environment has MH_GOAL for one of `goals`, wherever it is now: the
+ * environment outlives setsid and double forks, which leave the group and the tree. Never this
+ * process or what runs it. Linux reads /proc and macOS asks ps; elsewhere there's no telling, so [].
+ */
+export function tagged(goals: Set<string>): Tagged[] {
+  if (!goals.size || WINDOWS) return [];
+  const up = parents();
+  const mine = new Set<number>();
+  for (let p: number | undefined = process.pid; p && !mine.has(p); p = up.get(p)) mine.add(p);
+  return (process.platform === 'linux' ? fromProc() : fromPs()).filter(p => !mine.has(p.pid) && goals.has(p.goal));
+}
+
+/**
+ * Ends tagged processes: SIGTERM now, SIGKILL two seconds later to those still tagged then (so
+ * a PID the system gave to something else meanwhile is spared).
+ */
+export function endTagged(found: Tagged[]): void {
+  const signal = (pids: number[], sig: NodeJS.Signals) => {
+    for (const pid of pids) {
+      try {
+        process.kill(pid, sig);
+      } catch {
+        // Already gone.
+      }
+    }
+  };
+  signal(found.map(p => p.pid), 'SIGTERM');
+  setTimeout(() => {
+    const was = new Set(found.map(p => `${p.pid} ${p.goal} ${p.agent}`));
+    signal(tagged(new Set(found.map(p => p.goal))).filter(p => was.has(`${p.pid} ${p.goal} ${p.agent}`)).map(p => p.pid), 'SIGKILL');
+  }, 2000).unref();
+}
+
+function fromProc(): Tagged[] {
+  const out: Tagged[] = [];
+  let pids: string[];
+  try {
+    pids = readdirSync('/proc').filter(n => /^\d+$/.test(n));
+  } catch {
+    return out;
+  }
+  for (const pid of pids) {
+    let env: string;
+    try {
+      // Another user's processes can't be read, and aren't ours to end.
+      env = readFileSync(`/proc/${pid}/environ`, 'latin1');
+    } catch {
+      continue;
+    }
+    if (!env.includes('MH_GOAL=')) continue;
+    const vars = new Map(env.split('\0').map(v => [v.slice(0, v.indexOf('=')), v.slice(v.indexOf('=') + 1)]));
+    let command = '';
+    try {
+      command = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' ').trim();
+    } catch {
+      // Gone since.
+    }
+    out.push({ pid: Number(pid), goal: vars.get('MH_GOAL') ?? '', agent: vars.get('MH_AGENT') ?? '', command: command.slice(0, 200) });
+  }
+  return out;
+}
+
+/** macOS: ps -E puts a process's environment after its command line (for this user's processes). */
+function fromPs(): Tagged[] {
+  let text: string;
+  try {
+    text = execFileSync('ps', ['-A', '-E', '-ww', '-o', 'pid=,command='], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, maxBuffer: 64 << 20 });
+  } catch {
+    return [];
+  }
+  const out: Tagged[] = [];
+  for (const line of text.split('\n')) {
+    const goal = / MH_GOAL=(\S+)/.exec(line)?.[1];
+    if (!goal) continue;
+    const [, pid, rest] = /^\s*(\d+)\s+(.*)$/.exec(line) ?? [];
+    if (!pid) continue;
+    // The command ends where the environment starts, at the first NAME=value word.
+    const command = rest.split(/ (?=[A-Za-z_][A-Za-z0-9_]*=)/)[0];
+    out.push({ pid: Number(pid), goal, agent: / MH_AGENT=(\S+)/.exec(line)?.[1] ?? '', command: command.slice(0, 200) });
+  }
+  return out;
 }

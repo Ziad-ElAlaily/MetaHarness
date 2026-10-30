@@ -26,7 +26,7 @@ import { MAP_FILE, compareDesigns, designReport, type DesignReport, type Snapsho
 import { packFor, type FileDocs, type Highlights } from './languages.ts';
 import { configView, deleteItem, saveGuide, saveMcp, saveRole, saveRule, saveWorkflow, type ScopeDir } from './configedit.ts';
 import { loadProfiles } from './harnesses.ts';
-import { settle } from './procs.ts';
+import { endTagged, settle, tagged, type Tagged } from './procs.ts';
 import { foldEfforts, splitEffort, type EffortVariant } from './effort.ts';
 import { browse, folderSetup, forget, loadRegistry, nesting, Project, projectId, realDir, remember, within } from './projects.ts';
 import { matchesPaths, onCommit, onDone, onToolCall, rulesPrompt, RuleState, toolPaths, type Rule, type RuleAgent, type RuleNote, type ToolInfo } from './rules.ts';
@@ -253,6 +253,8 @@ export interface DaemonOptions {
   contextNotesMs?: number;
   /** How long a finished agent keeps its process before it's let go (its session resumes when messaged). Default 10 minutes; 0 never. */
   releaseMs?: number;
+  /** How long after an agent's session ends what it left running is looked for and ended (default 6 seconds, once its CLI has had its chance to exit). */
+  straysMs?: number;
   /** How long the goal branch stays quiet before what landed on it is announced (default a minute). */
   landedQuietMs?: number;
   /** How long close() waits for the harnesses' processes to exit before they're killed. */
@@ -420,6 +422,7 @@ export class Daemon {
   readonly gatekeeperLimits?: GatekeeperLimits;
   readonly contextNotesMs: number;
   private releaseMs: number;
+  private straysMs: number;
   private closeGraceMs: number;
   private landedQuietMs: number;
   /** Snapshots being taken, so close() waits for them. */
@@ -446,6 +449,7 @@ export class Daemon {
     this.gatekeeperLimits = o.gatekeeperLimits;
     this.contextNotesMs = o.contextNotesMs ?? 120_000;
     this.releaseMs = o.releaseMs ?? 10 * 60_000;
+    this.straysMs = o.straysMs ?? 6000;
     this.closeGraceMs = o.closeGraceMs ?? 3000;
     this.landedQuietMs = o.landedQuietMs ?? 60_000;
     if (o.repo) this.defaultProject = this.loadProject(realDir(o.repo), o.configDirs);
@@ -864,7 +868,8 @@ export class Daemon {
           // Other projects and MetaHarness's home are off limits; this project, the goal's folder and the git guard aren't.
           readRoots: [g.dir, join(this.home, 'goals', g.id), this.guardDir],
           denyRead: [...this.otherProjects(g), this.home],
-          env: g.git ? guardEnv(this.guardDir, rec.worktree?.branch, g.git.repo, { goal: rec.goal, agent: rec.name }) : undefined,
+          // MH_GOAL and MH_AGENT also mark what its commands start, so it can be found once they're done (endStraysLater).
+          env: { MH_GOAL: rec.goal, MH_AGENT: rec.name, ...(g.git ? guardEnv(this.guardDir, rec.worktree?.branch, g.git.repo, { goal: rec.goal, agent: rec.name }) : {}) },
           sharedCheckout: this.sharedCheckout(rec),
           deniedCommands: deniedCommandPrefixes(this.sharedCheckout(rec)),
           approvals: this.approvalMode(rec),
@@ -1137,6 +1142,7 @@ export class Daemon {
       exited: (reason, detail) => {
         if (!live() || FINISHED.includes(rec.state)) return;
         const state = reason === 'crashed' ? 'crashed' : 'ended';
+        this.endStraysLater(rec);
         this.setState(rec, state);
         this.emit({ ...base, type: `agent.${state}`, data: { reason: detail ?? reason } });
         if (rec.doneNote === undefined) {
@@ -1808,6 +1814,7 @@ export class Daemon {
         rec.resumeId = s.nativeId;
         this.carryOver(rec);
         void s.stop().catch(() => {});
+        this.endStraysLater(rec);
         this.emit({ goal: rec.goal, agent: rec.name, type: 'agent.released', data: { idleMs: now - (rec.settledAt ?? now) } });
       }
   }
@@ -3020,10 +3027,63 @@ export class Daemon {
     clearTimeout(rec.limitTimer);
     this.endPause(rec);
     this.clearRefresh(rec);
+    this.endStraysLater(rec);
     this.setState(rec, 'ended');
     this.emit({ goal: goalId, agent: name, type: 'agent.ended', data: { reason: `stopped by ${by}` } });
     if (rec.doneNote === undefined) this.finish(rec, `${name} was stopped by ${by}.`, 'ended');
     return `Stopped ${name}.`;
+  }
+
+  /**
+   * After an agent's session ends, what its commands left running goes too. Its CLI's group and
+   * tree go with it (procs.endTree), but whatever detached (setsid, a double fork) is in neither;
+   * it still carries the agent's MH_GOAL and MH_AGENT. Waits until the CLI has had its chance to
+   * exit, and leaves everything alone if the agent has a session again by then.
+   */
+  private endStraysLater(rec: AgentRec): void {
+    const gen = rec.gen;
+    setTimeout(() => {
+      if (rec.gen !== gen || this.closing) return;
+      const found = tagged(new Set([rec.goal])).filter(p => p.agent === rec.name);
+      if (!found.length) return;
+      endTagged(found);
+      this.emit({ goal: rec.goal, agent: rec.name, type: 'procs.ended', data: { procs: found.map(strayData), reason: 'its session ended' } });
+    }, this.straysMs).unref();
+  }
+
+  /**
+   * What agents of an earlier daemon left running: every process tagged with a goal in the log
+   * (a daemon that was killed never ended its agents' CLIs). Call once at startup, before any
+   * agent starts, so none of it is this daemon's. Returns how many it ended.
+   */
+  endLeftovers(): number {
+    const found = tagged(new Set(this.store.ofType('goal.started').map(e => e.goal)));
+    if (!found.length) return 0;
+    endTagged(found);
+    for (const goal of new Set(found.map(p => p.goal))) {
+      this.emit({ goal, type: 'procs.ended', data: { procs: found.filter(p => p.goal === goal).map(strayData), reason: 'left by the last daemon' } });
+    }
+    return found.length;
+  }
+
+  /**
+   * The processes agents of goals in the log started that are still running, each marked a stray
+   * when no session of its agent is running here. With `end`, the strays are ended.
+   */
+  listProcs(end = false): { procs: (Tagged & { request: string; stray: boolean })[]; ended: number } {
+    const requests = new Map(this.store.ofType('goal.started').map(e => [e.goal, String(e.data.request ?? '')]));
+    const procs = tagged(new Set(requests.keys())).map(p => {
+      const rec = this.agent(p.goal, p.agent);
+      return { ...p, request: requests.get(p.goal) ?? '', stray: !rec?.session || FINISHED.includes(rec.state) };
+    });
+    const strays = procs.filter(p => p.stray);
+    if (end && strays.length) {
+      endTagged(strays);
+      for (const goal of new Set(strays.map(p => p.goal))) {
+        this.emit({ goal, type: 'procs.ended', data: { procs: strays.filter(p => p.goal === goal).map(strayData), reason: 'the human ended them' } });
+      }
+    }
+    return { procs, ended: end ? strays.length : 0 };
   }
 
   /** Pauses (or resumes) every agent still working on a goal. */
@@ -4350,6 +4410,8 @@ export class Daemon {
       }
       case 'goal.clean':
         return this.cleanGoals(s('goal'), b.force === true);
+      case 'goal.procs':
+        return this.listProcs(b.end === true);
       case 'goal.delete': {
         const ids = Array.isArray(b.goals) ? b.goals.map(String) : s('goal') ? [s('goal')!] : [];
         if (!ids.length) throw new Error('goal.delete needs "goals": the goals to delete.');
@@ -4541,7 +4603,7 @@ export class Daemon {
         return { ...(await this.harnessModels(harness, b.refresh === true)) };
       }
       default:
-        throw new Error(`Unknown command "${String(b.cmd)}". Commands: goal.start, goal.pause, goal.resume, goal.end, goal.clean, goal.delete, goal.sizes, goal.open_folder, agent.message, agent.spawn, agent.pause, agent.resume, agent.stop, agent.open_native, inbox.resolve, harness.test, harness.check, harness.models, limits.check, config.get, project.open, project.create, project.clone, project.forget, project.list, settings.save, role.builtin, role.update, assistant.ask, assistant.reset, assistant.state, assistant.set, assistant.make_default, assistant.options, assistant.apply, assistant.dismiss, role.save, role.delete, workflow.save, workflow.delete, rule.save, rule.delete, guide.save, mcp.save.`);
+        throw new Error(`Unknown command "${String(b.cmd)}". Commands: goal.start, goal.pause, goal.resume, goal.end, goal.clean, goal.delete, goal.procs, goal.sizes, goal.open_folder, agent.message, agent.spawn, agent.pause, agent.resume, agent.stop, agent.open_native, inbox.resolve, harness.test, harness.check, harness.models, limits.check, config.get, project.open, project.create, project.clone, project.forget, project.list, settings.save, role.builtin, role.update, assistant.ask, assistant.reset, assistant.state, assistant.set, assistant.make_default, assistant.options, assistant.apply, assistant.dismiss, role.save, role.delete, workflow.save, workflow.delete, rule.save, rule.delete, guide.save, mcp.save.`);
     }
   }
 
@@ -4943,6 +5005,9 @@ export class Daemon {
     this.store.close();
   }
 }
+
+/** A stray process, as the log keeps it. */
+const strayData = (p: Tagged) => ({ pid: p.pid, agent: p.agent, command: p.command });
 
 export function formatForAgent(entries: InboxEntry[]): string {
   return entries

@@ -551,6 +551,15 @@ Home, or a room's header): what to talk about, and the makers.
 - **Cleanup.** When a goal ends, MetaHarness removes its worktrees and the branches already
   merged into your branch. Anything with uncommitted or unmerged work is kept and listed in the
   lead's note. Remove it yourself when you're sure: `mh clean <goal> --force`.
+- **Processes.** Each agent's CLI runs in a process group of its own; stopping the agent ends
+  the group and everything under the CLI. What detached (`setsid`, a double fork, a dev server
+  that backgrounds itself) still carries the agent's `MH_GOAL` and `MH_AGENT` in its
+  environment, so a few seconds after the agent's session ends (stopped, crashed, or let go
+  after its quiet spell) MetaHarness ends whatever still has its tag, and the goal's story says
+  what. A daemon that was killed can't do this; the next one ends what its goals left running
+  when it starts. `mh ps` lists what agents started that still runs, marking strays (their
+  agent's session is over); `mh ps --end` ends those now. Linux and macOS; Docker containers
+  belong to Docker and aren't found.
 - **Dependencies.** A worktree gets a hard-linked copy of your `node_modules` (and `vendor`), so
   tests run without installing. An agent that reinstalls only touches its copy.
 - **The shared folder** (`~/.metaharness/goals/<goal>/shared/`) holds designs, notes and
