@@ -351,6 +351,10 @@ test('cards branch into a room of their own; a new room carries a past board ove
 
   const goal = d.startGoal({ request: 'Build the walls', lead: 'designer', fromRoom: first });
   assert.match(d.agent(goal, 'designer')!.brief, /comes out of a brainstorm room[\s\S]*canvas\.md/);
+  const copied = join(d.goals.get(goal)!.sharedDir, 'imported', 'room', 'canvas.md');
+  assert.ok(existsSync(copied), "the room's board is copied in, so it outlasts the room");
+  assert.match(d.agent(goal, 'designer')!.brief, new RegExp(copied.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.equal(d.listGoals().find(x => x.id === goal)?.from, first);
   assert.equal(d.listGoals().find(x => x.id === first)?.kind, 'room');
   assert.match(d.canvasTool(d.agent(goal, 'designer')!, []), /only|for brainstorm rooms/);
   await d.close();

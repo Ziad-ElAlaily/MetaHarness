@@ -87,8 +87,9 @@ a { color: var(--accent); }
 .content { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .rail {
   display: flex; flex-direction: column; align-items: stretch; gap: 2px; padding: 10px 6px;
-  background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto;
+  background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; overflow-x: hidden;
 }
+.rail-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rail-brand { display: grid; place-items: center; height: 36px; margin-bottom: 8px; }
 .rail-brand svg { width: 22px; height: 22px; }
 .rail-btn {
@@ -1474,3 +1475,44 @@ input.cast-name { width: 160px; font-size: 12.5px; }
 .folder-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dialog .row.between { justify-content: flex-start; align-items: center; flex-wrap: wrap; }
 .dialog .row.between input.new-folder { width: 160px; flex: none; }
+
+/* Views inside a goal tab (Story / Every event, Map / Messages / Busy). */
+.tab-views { align-self: center; margin: 0 0 4px 10px; }
+.tab-views button { padding: 2px 9px; font-size: 12px; }
+
+/* Approvals, beside the away switch. */
+.approvals-select { display: inline-flex; gap: 6px; align-items: center; font-size: 12.5px; white-space: nowrap; }
+.approvals-select select { padding: 2px 6px; font-size: 12.5px; }
+
+/* A finished goal's outcome, above its story. */
+.goal-outcome { margin: 10px 12px 0; display: grid; gap: 6px; max-height: 45vh; overflow: auto; flex-shrink: 0; }
+.goal-outcome .kicker { display: flex; gap: 8px; align-items: center; }
+.outcome-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.outcome-actions input { min-width: 260px; }
+
+/* Documents to take along into a goal that continues another. */
+.doc-picker { display: grid; gap: 6px; }
+.doc-list { display: grid; gap: 2px; max-height: 220px; overflow: auto; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
+.doc-list .check { display: flex; gap: 8px; align-items: center; }
+.doc-list .check .muted { margin-left: auto; }
+
+/* Home: plan limits first, then lines of work. */
+.home-limits { margin-bottom: 22px; }
+.chains { display: grid; gap: 10px; }
+.chain { display: grid; gap: 6px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); }
+.chain-steps { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; min-width: 0; }
+.chain-step-wrap { display: inline-flex; gap: 4px; align-items: center; min-width: 0; max-width: 100%; }
+.chain-step { display: inline-flex; gap: 6px; align-items: center; min-width: 0; max-width: 340px; padding: 2px 8px 2px 3px; border: 1px solid transparent; border-radius: 8px; background: none; color: var(--text-2); font: inherit; font-size: 13px; cursor: pointer; }
+.chain-step:hover { border-color: var(--line-strong); color: var(--text); }
+.chain-step.tip { color: var(--text); font-weight: 600; max-width: 520px; }
+.chain-arrow { color: var(--text-3); }
+.chain-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.nowrap { white-space: nowrap; }
+
+/* Setup's pages, grouped, across the top. */
+.setup-nav { display: flex; gap: 18px; flex-wrap: wrap; padding: 8px 20px 0; border-bottom: 1px solid var(--line); background: var(--panel); flex-shrink: 0; }
+.setup-group { display: inline-flex; align-items: flex-end; gap: 2px; }
+.setup-group-name { align-self: center; margin-right: 6px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); font-weight: 650; padding-bottom: 4px; }
+
+/* The Design tab's lens switch above the commit history. */
+.git-lens { padding: 8px 12px 0; }

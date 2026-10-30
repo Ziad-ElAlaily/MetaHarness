@@ -241,6 +241,14 @@ since you last looked, so agents notice them naturally.
   nobody's tool call named is reported without a writer. A file's owner is its first known
   writer, so a write by anyone else is a clash: the writer is told whose it is and where the
   previous version is kept, and the owner is told who changed it.
+- **Goals continue goals.** Most work is a line of goals: an audit or a room ends in a design,
+  the next goal implements it, the one after reviews it. A goal can start *from* another
+  (`goal.start` with `from` and the `files` to take along) or from a room (`fromRoom`): the
+  files (for a room, its whole `room/` folder) are copied into the new goal's
+  `shared/imported/`, so deleting the old goal later loses nothing, and the new lead's brief
+  carries the old goal's outcome and where the copies are. `goal.started` records `from`, and
+  the goals list gives each goal the one it continues (for goals from before, the goal whose
+  shared folder its request names), which is how Home groups them into lines of work.
 
 ---
 
@@ -573,7 +581,8 @@ Agent states: `starting` · `working` · `waiting` · `idle` · `done` · `ended
 
 | Command | Arguments |
 |---|---|
-| `goal.start` | request, project, workflow?, lead? |
+| `goal.start` | request, project, workflow?, lead?, from? + files? (a goal to continue, and its documents to copy in), fromRoom? |
+| `goal.docs` | goal: the documents in its shared folder, latest first |
 | `project.open` · `project.create` · `project.clone` · `project.forget` · `project.list` | dir, trust? (a folder with its own setup answers `needsTrust` with what it would run) · dir, git? · url, dir · project · — |
 | `goal.pause` · `goal.resume` · `goal.end` | goal (end stops everyone, then cleans up as usual) |
 | `goal.clean` | goal?, force? |
@@ -657,12 +666,13 @@ VS Code panel works the same way.
 | **Inbox** | Approvals, questions, stuck agents, crashes; browser notifications | Stepping in |
 | **Shared folder** | Files, every version, who wrote it, diffs between versions | Tracing handoffs |
 | **Design** | One screen: a scope (the whole goal, with or without unmerged branches; a landing; an agent's branch; a commit; a range) picked on a lane graph of the branches, and the code's areas in layers: what the scope changed, dependencies (new, lost, circular), declared flows, hotspots, live activity; an area's changed definitions with each one's diff, its files as a treemap, pinned notes; focus on one agent; findings for next time | Following the architecture as it changes, without reading every diff |
-| **Git** | Branch per agent, every commit and merge with its author, size and the areas it touched (opening Design there), diffs (a commit, a branch, the whole goal, uncommitted work), conflicts | Code integration; the Design view is meant to make it the raw view only |
+| **Design → Commits** | Branch per agent, every commit and merge with its author, size and the areas it touched (opening the map there), diffs (a commit, a branch, the whole goal, uncommitted work), conflicts. The Design tab's third lens (it was the Git tab) | Code integration: the raw view under the map |
 | **Costs** | By agent, role and model; spending rate | Spend |
 | **Replay** | Time scrubber over a finished goal; every view replays | Improving roles and workflows |
 | **Search** | Across streams, messages and shared files | Finding anything |
+| **Home** | Plan limits, what needs you, approvals and away, what's running, and lines of work (goals and rooms grouped by what continues what), each with Implement / Review / Continue | Where you start, and going on from what's done |
 | **Goals** | Current and past goals, with retrospectives | History |
-| **Rooms** | Brainstorms (§21): the chat with the room's lead, the makers it sends (or you ask), and the board it keeps: images, playable demos, references, mixes; the goal tabs besides | Getting clear and deciding, before a goal |
+| **Rooms** | Brainstorms (§21): the chat with the room's lead, the makers it sends (or you ask), and the board it keeps: images, playable demos, references, mixes; and its Files and Costs | Getting clear and deciding, before a goal |
 
 ### When the team gets big
 
@@ -757,8 +767,8 @@ The screen is one page: a lane graph of the branches picks the scope, the map dr
 (change, dependencies, flows, hotspots, activity), and the inspector goes from an area to a
 definition's own lines of the diff (definitions keep their last line; the diff's hunks are cut
 to that range). Picking an agent fades what it didn't touch. Where the view is (scope, area,
-focus) outlasts switching tabs; the Git tab's commits name the areas they touched and open the
-view there.
+focus, lens) outlasts switching tabs. The goal's history and diffs are the tab's third lens,
+**Commits** (the old Git tab): its commits name the areas they touched and open the map there.
 
 **Reports** (`designReport` in `src/design.ts`) are what a scope did, as JSON a later goal or a
 model can read: its commits with author and areas, each area's lines, files, commits, authors

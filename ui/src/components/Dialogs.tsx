@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { api } from '../api.ts';
 import type { ConfigView, Goal } from '../types.ts';
 import { Dialog, Field, Toggle } from './common.tsx';
-import { modelLabel } from '../format.ts';
+import { ago, modelLabel } from '../format.ts';
 
 /** What a goal starts from: the request, who leads, and (optionally) the workflow the lead follows. */
 export function NewGoalForm({ config, onStart, onCancel, initialWorkflow = '', initialRequest = '', extra, autoFocus }: {
@@ -76,12 +77,115 @@ export function NewGoalForm({ config, onStart, onCancel, initialWorkflow = '', i
   );
 }
 
-export function StartGoalDialog({ config, initialWorkflow, initialRequest, fromRoom, onClose, onStart }: { config?: ConfigView; initialWorkflow?: string; initialRequest?: string; fromRoom?: string; onClose: () => void; onStart: (b: Record<string, unknown>) => Promise<boolean> }) {
+/** A goal or room a new goal continues from: what it was, and what the new goal is for. */
+export interface ContinueFrom {
+  id: string;
+  label: string;
+  kind: 'goal' | 'room';
+  action?: 'implement' | 'review' | 'continue';
+  /** Documents to take along (relative to its shared folder); unset: the main one. */
+  files?: string[];
+}
+
+const ACTIONS: Record<NonNullable<ContinueFrom['action']>, { title: string; request: string }> = {
+  implement: { title: 'Implement', request: 'Implement the design in the imported files.' },
+  review: { title: 'Review', request: 'Review what the previous goal did: bugs, gaps and design problems.' },
+  continue: { title: 'Continue from', request: '' },
+};
+
+/** The document a goal is most likely continued from: its latest design, plan or report of its own. */
+export function keyDoc(docs: { path: string }[]): string | undefined {
+  const own = docs.filter(d => !d.path.startsWith('imported/') && /\.md$/i.test(d.path));
+  const named = (d: { path: string }) => /(design|plan|spec|report|review|audit|proposal|brief)[^/]*\.md$/i.test(d.path);
+  const top = own.filter(d => !d.path.includes('/'));
+  // Its own top-level design or report first; files in folders are mostly notes and logs.
+  return (top.find(named) ?? own.find(named) ?? top[0] ?? own[0])?.path;
+}
+
+export function StartGoalDialog({ config, initialWorkflow, initialRequest, from, onClose, onStart }: { config?: ConfigView; initialWorkflow?: string; initialRequest?: string; from?: ContinueFrom; onClose: () => void; onStart: (b: Record<string, unknown>) => Promise<boolean> }) {
+  const action = from?.action ? ACTIONS[from.action] : undefined;
+  const [files, setFiles] = useState<string[]>();
+  const extra = !from ? undefined : from.kind === 'room' ? { fromRoom: from.id } : { from: from.id, files: files ?? [] };
   return (
-    <Dialog title={fromRoom ? 'New goal from the room' : 'New goal'} onClose={onClose} wide>
-      {fromRoom && <div className="dialog-body muted small">The lead is pointed at the room's canvas, its design if one was written, and the whole chat.</div>}
-      <NewGoalForm config={config} onStart={onStart} onCancel={onClose} initialWorkflow={initialWorkflow} initialRequest={initialRequest} extra={fromRoom ? { fromRoom } : undefined} autoFocus />
+    <Dialog title={!from ? 'New goal' : from.kind === 'room' ? 'New goal from the room' : `${action?.title ?? 'Continue from'}: ${from.label.slice(0, 60)}`} onClose={onClose} wide>
+      {from?.kind === 'room' && <div className="dialog-body muted small">The room's board, its design if one was written, and the whole chat are copied into the new goal's shared folder, and the lead is pointed at them.</div>}
+      {from?.kind === 'goal' && <DocPicker goal={from.id} preset={from.files} picked={files} onPick={setFiles} />}
+      <NewGoalForm config={config} onStart={onStart} onCancel={onClose} initialWorkflow={initialWorkflow} initialRequest={initialRequest ?? action?.request} extra={extra} autoFocus />
     </Dialog>
+  );
+}
+
+/** The documents of the goal being continued, to copy into the new one; the lead also gets its outcome. */
+function DocPicker({ goal, preset, picked, onPick }: { goal: string; preset?: string[]; picked?: string[]; onPick: (f: string[]) => void }) {
+  const [docs, setDocs] = useState<{ path: string; size: number; at: string }[]>();
+  const [all, setAll] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    api.command<{ docs: { path: string; size: number; at: string }[] }>({ cmd: 'goal.docs', goal }).then(
+      r => {
+        if (!alive) return;
+        setDocs(r.docs);
+        const main = keyDoc(r.docs);
+        onPick(preset ?? (main ? [main] : []));
+      },
+      () => alive && setDocs([]),
+    );
+    return () => {
+      alive = false;
+    };
+    // Read once per goal.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [goal]);
+  const on = new Set(picked ?? []);
+  const shown = all ? docs : docs?.filter((d, i) => i < 8 || on.has(d.path));
+  return (
+    <div className="dialog-body doc-picker">
+      <div className="muted small">Its outcome goes to the lead. Documents to copy into the new goal's shared folder (as <span className="mono">imported/…</span>), so they outlast the old goal:</div>
+      {!docs ? (
+        <div className="muted small">Reading its shared folder…</div>
+      ) : !docs.length ? (
+        <div className="muted small">It left no documents.</div>
+      ) : (
+        <div className="doc-list">
+          {shown!.map(d => (
+            <label key={d.path} className="check small">
+              <input type="checkbox" checked={on.has(d.path)} onChange={e => onPick(e.target.checked ? [...on, d.path] : [...on].filter(p => p !== d.path))} />
+              <span className="mono">{d.path}</span>
+              <span className="muted">{ago(d.at)}</span>
+            </label>
+          ))}
+          {!all && docs.length > shown!.length && (
+            <button className="btn ghost small" onClick={() => setAll(true)}>
+              All {docs.length}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** What to do next with a finished goal or room: each opens a new goal that continues it. */
+export function ContinueButtons({ from, onContinue, small }: { from: Omit<ContinueFrom, 'action'>; onContinue: (f: ContinueFrom) => void; small?: boolean }) {
+  const cls = `btn${small ? ' small' : ''}`;
+  if (from.kind === 'room')
+    return (
+      <button className={cls} onClick={() => onContinue(from)} title="A goal that carries out what the room settled, with its board copied in">
+        → Goal
+      </button>
+    );
+  return (
+    <>
+      <button className={cls} onClick={() => onContinue({ ...from, action: 'implement' })} title="A new goal that implements its design: the documents are copied in">
+        Implement
+      </button>
+      <button className={cls} onClick={() => onContinue({ ...from, action: 'review' })} title="A new goal that reviews what it did">
+        Review
+      </button>
+      <button className={cls} onClick={() => onContinue({ ...from, action: 'continue' })} title="A new goal of your own that starts from it">
+        Continue…
+      </button>
+    </>
   );
 }
 

@@ -176,3 +176,6 @@ export function duration(fromTs: string | number, to: number = Date.now()): stri
 
 /** The first line of a note, for a one-line summary. */
 export const firstLine = (s: string | null | undefined) => (s ?? '').trim().split('\n')[0];
+
+/** A goal's first line, with paths into another goal's shared folder cut to the file's own path. */
+export const goalTitle = (s: string | null | undefined) => firstLine(s).replace(/\S*\.metaharness\/goals\/[0-9a-f]{8}\/shared\/(\S+)/g, '$1');

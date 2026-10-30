@@ -147,6 +147,8 @@ export interface GoalSummary {
   result: string | null;
   inbox: number;
   needs: number;
+  /** The goal or room it continues, if any. */
+  from: string | null;
 }
 
 export type Scope = 'personal' | 'repo';

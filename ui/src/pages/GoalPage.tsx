@@ -1,13 +1,13 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { ago, BUSY, duration, money } from '../format.ts';
+import { ago, BUSY, duration, goalTitle, money } from '../format.ts';
 import type { ConfigView, Goal, GoalSummary, MhEvent, Snapshot } from '../types.ts';
 import { TeamTree } from '../components/TeamTree.tsx';
 import { ACTIONABLE, NeedsYou, Updates } from '../components/Inbox.tsx';
 import { AgentDetail } from '../components/AgentDetail.tsx';
 import { ErrorBoundary, Markdown, More, useConfirm } from '../components/common.tsx';
-import { MessageDialog } from '../components/Dialogs.tsx';
+import { ContinueButtons, MessageDialog, type ContinueFrom } from '../components/Dialogs.tsx';
 import { AccountChips, harnessOf } from '../components/Accounts.tsx';
-import { AwayButton, AwayNote, useAway } from '../components/Away.tsx';
+import { ApprovalsSelect, AwayButton, AwayNote, useAway } from '../components/Away.tsx';
 import { Splitter } from '../components/Splitter.tsx';
 import { Story } from '../views/Story.tsx';
 import { Files } from '../views/Files.tsx';
@@ -23,23 +23,30 @@ const Sequence = lazy(() => import('../views/Sequence.tsx'));
 const Timeline = lazy(() => import('../views/Timeline.tsx'));
 const Costs = lazy(() => import('../views/Costs.tsx'));
 const Design = lazy(() => import('../views/Design.tsx'));
-const Git = lazy(() => import('../views/Git.tsx'));
 const RoomView = lazy(() => import('../views/RoomView.tsx'));
 
 export type GoalTab = 'thread' | 'story' | 'design' | 'git' | 'files' | 'graph' | 'sequence' | 'timeline' | 'costs' | 'log';
-const TABS: [GoalTab, string, string][] = [
-  ['story', 'Story', 'What happened, the important parts first'],
-  ['design', 'Design', 'The code as areas from the map, in layers: what a commit, a landing, a branch or the whole goal changed, dependencies, flows, hotspots, and who works where'],
-  ['git', 'Git', 'Commits, branches and diffs'],
-  ['files', 'Files', 'The shared folder: designs, reviews, reports'],
-  ['graph', 'Graph', 'Who talks to whom'],
-  ['sequence', 'Sequence', 'Messages over time'],
-  ['timeline', 'Timeline', 'Who was busy when'],
-  ['costs', 'Costs', 'Where the money went, by agent, role, model and kind of token'],
-  ['log', 'Log', 'Every event, as it happened'],
-];
-/** A room's tabs: the room first, where a goal has its story; the rest as for a goal. */
-const ROOM_TABS: [GoalTab, string, string][] = [['thread', 'Room', 'The room: the chat with its lead, the board, and the makers'], ...TABS.filter(([t]) => t !== 'story')];
+/** A tab, and the views it switches between (the first is where it opens). */
+type TabDef = { id: GoalTab; label: string; title: string; views?: [GoalTab, string, string][] };
+const TAB = {
+  story: {
+    id: 'story', label: 'Story', title: 'What happened, the important parts first',
+    views: [['story', 'Story', 'What happened, the important parts first'], ['log', 'Every event', 'Every event, as it happened, with filters']],
+  },
+  graph: {
+    id: 'graph', label: 'Graph', title: 'Who talks to whom, and when',
+    views: [['graph', 'Map', 'Who talks to whom'], ['sequence', 'Messages', 'Messages over time'], ['timeline', 'Busy', 'Who was busy when']],
+  },
+  design: { id: 'design', label: 'Design', title: 'The code: its areas and systems, what a commit, a landing, a branch or the whole goal changed, and the commits with their diffs' },
+  files: { id: 'files', label: 'Files', title: 'The shared folder: designs, reviews, reports' },
+  costs: { id: 'costs', label: 'Costs', title: 'Where the money went, by agent, role, model and kind of token' },
+  room: { id: 'thread', label: 'Room', title: 'The room: the chat with its lead, the board, and the makers' },
+} satisfies Record<string, TabDef>;
+const TABS: TabDef[] = [TAB.story, TAB.graph, TAB.design, TAB.files, TAB.costs];
+/** A room's tabs: the room, then what it wrote and what it cost. */
+const ROOM_TABS: TabDef[] = [TAB.room, TAB.files, TAB.costs];
+/** The tab each view belongs to (Git is the Design tab's Commits lens). */
+const TAB_OF: Partial<Record<GoalTab, GoalTab>> = { log: 'story', sequence: 'graph', timeline: 'graph', git: 'design' };
 
 export type { RoomFrom };
 
@@ -94,14 +101,15 @@ interface Props {
   onCommand: (body: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>;
   onSpawn: (parent?: string) => void;
   onNewGoal: () => void;
+  /** A new goal that continues this one, or this room. */
+  onContinue: (from: ContinueFrom) => void;
+  onSaveConfig: (b: Record<string, unknown>) => Promise<unknown>;
   onEditRole: (role: string) => void;
   onHarnesses: () => void;
   config?: ConfigView;
   /** Rooms, for a room's switcher. */
   rooms: GoalSummary[];
   onNewRoom: (from?: RoomFrom) => void;
-  /** A goal that carries out what a room settled. */
-  onGoalFromRoom: (room: string, topic: string) => void;
   onAllGoals: () => void;
   onAllRooms: () => void;
 }
@@ -110,21 +118,31 @@ export function GoalPage(p: Props) {
   const { goal, snapshot, events } = p;
   const isRoom = goal?.kind === 'room';
   const roomView = useMemo(() => (isRoom ? roomOf(events) : undefined), [isRoom, events]);
-  // A room has its room tab (kept as "thread" in links) where a goal has a story.
-  const tab: GoalTab = isRoom && p.tab === 'story' ? 'thread' : !isRoom && p.tab === 'thread' ? 'story' : p.tab;
+  // A room has its room tab (kept as "thread" in links) where a goal has a story; a room's other tabs are a goal's.
+  const tab: GoalTab = isRoom ? (['thread', 'files', 'costs'].includes(p.tab) ? p.tab : 'thread') : p.tab === 'thread' ? 'story' : p.tab === 'git' ? 'design' : p.tab;
+  const group = TAB_OF[tab] ?? tab;
+  // Links to the Git tab open the Design tab's Commits lens.
+  useEffect(() => {
+    if (p.tab === 'git' && !isRoom) setDesignNav(n => ({ ...n, lens: 'commits' }));
+  }, [p.tab, isRoom]);
+  const leadAgent = goal?.agents.find(a => a.name === goal.lead);
+  const finished = !!goal && !isRoom && goal.status !== 'running';
   const inbox = useMemo(() => (snapshot?.inbox ?? []).filter(i => i.goal === goal?.id), [snapshot, goal?.id]);
   const needs = inbox.filter(i => ACTIONABLE.includes(i.kind));
-  const updates = inbox.filter(i => !ACTIONABLE.includes(i.kind));
+  // The lead's report shows as the goal's outcome once it's over, not again among the updates.
+  const leadDoneItem = inbox.find(i => i.kind === 'done' && i.agent === goal?.lead);
+  const updates = inbox.filter(i => !ACTIONABLE.includes(i.kind) && !(finished && i === leadDoneItem));
   const agent = goal?.agents.find(a => a.name === p.agentName) ?? goal?.agents.find(a => a.name === goal.lead);
   const resolve = (item: string, decision: string, reply?: string) => void p.onCommand({ cmd: 'inbox.resolve', item, decision, reply });
   const [away] = useAway(snapshot?.away, p.onCommand);
+  // Where the Design view is (its scope, area, focus and lens) outlasts switching tabs, not goals.
+  const [designNav, setDesignNav] = useState<DesignNav>({});
   const [gitSel, setGitSel] = useState<GitSel>();
   const openGit = (sel: GitSel) => {
     setGitSel(sel);
-    p.onTab('git');
+    setDesignNav(n => ({ ...n, lens: 'commits' }));
+    p.onTab('design');
   };
-  // Where the Design view is (its scope, area and focus) outlasts switching tabs, not goals.
-  const [designNav, setDesignNav] = useState<DesignNav>({});
   const [room, setRoom] = useRoom(isRoom ? 'room' : 'goal');
   // With its column put away, an agent picked slides in over the tab; the graph shows it in its own side panel instead.
   const [drawer, setDrawer] = useState(false);
@@ -150,10 +168,6 @@ export function GoalPage(p: Props) {
   }, [drawer]);
   const allAway = !!(room.team && room.header && room.agent);
   useEffect(() => setDesignNav({}), [goal?.id]);
-  const openDesign = (nav: DesignNav) => {
-    setDesignNav(nav);
-    p.onTab('design');
-  };
 
   if (!goal) {
     return (
@@ -205,7 +219,7 @@ export function GoalPage(p: Props) {
             onGoal={p.onGoal}
             onNewRoom={() => p.onNewRoom()}
             onRoomFromThis={() => p.onNewRoom({ id: goal.id, label: goal.request.split('\n')[0], kind: 'room', topic: goal.request, lenses: roomView.lenses })}
-            onStartGoal={() => p.onGoalFromRoom(goal.id, goal.request)}
+            onStartGoal={() => p.onContinue({ id: goal.id, label: goalTitle(goal.request), kind: 'room' })}
             onDesign={() => openFile('room/design.md')}
             onAllRooms={p.onAllRooms}
             onCommand={p.onCommand}
@@ -238,11 +252,20 @@ export function GoalPage(p: Props) {
                 <span className={`pill ${goal.status}`}>{goal.status}</span> {goal.request.split('\n')[0]}
               </button>
             )}
-            {(isRoom ? ROOM_TABS : TABS).map(([t, label, title]) => (
-              <button key={t} className={`tab${tab === t ? ' on' : ''}`} title={title} onClick={() => p.onTab(t)}>
-                {label}
+            {(isRoom ? ROOM_TABS : TABS).map(t => (
+              <button key={t.id} className={`tab${group === t.id ? ' on' : ''}`} title={t.title} onClick={() => group !== t.id && p.onTab(t.id)}>
+                {t.label}
               </button>
             ))}
+            {TABS.find(t => t.id === group)?.views && (
+              <span className="seg tab-views" role="group" aria-label="View">
+                {TABS.find(t => t.id === group)!.views!.map(([v, label, title]) => (
+                  <button key={v} className={tab === v ? 'on' : ''} title={title} onClick={() => p.onTab(v)}>
+                    {label}
+                  </button>
+                ))}
+              </span>
+            )}
             <span className="grow" />
             <span className="room-toggles" role="group" aria-label="Make room">
               <RoomButton on={!room.team} label="team column" icon="team" onClick={() => setRoom({ ...room, team: !room.team })} />
@@ -275,6 +298,9 @@ export function GoalPage(p: Props) {
                 onRoom={p.onGoal}
               />
             )}
+            {finished && group === 'story' && (
+              <Outcome goal={goal} lead={leadAgent} item={leadDoneItem} onResolve={resolve} onContinue={p.onContinue} onFile={openFile} events={events} onNewRoom={p.onNewRoom} />
+            )}
             {tab === 'story' && (
               <Story
                 goal={goal}
@@ -283,9 +309,13 @@ export function GoalPage(p: Props) {
                 onOpenFile={openFile}
               />
             )}
-            {tab === 'design' && <Design goal={goal} events={events} nav={designNav} onNav={setDesignNav} onCommand={p.onCommand} onSelectAgent={onAgent} onOpenCommit={sha => openGit({ kind: 'commit', sha })} />}
-            {tab === 'git' && <Git goal={goal} events={events} sel={gitSel} onSel={setGitSel} onSelectAgent={onAgent} onOpenDesign={(sha, area) => openDesign({ scope: { kind: 'commit', sha }, area })} />}
-            {tab === 'files' && <Files goal={goal} events={events} selected={p.file} onSelect={p.onFile} onSelectAgent={onAgent} />}
+            {tab === 'design' && <Design goal={goal} events={events} nav={designNav} onNav={setDesignNav} onCommand={p.onCommand} onSelectAgent={onAgent} gitSel={gitSel} onGitSel={setGitSel} />}
+            {tab === 'files' && (
+              <Files
+                goal={goal} events={events} selected={p.file} onSelect={p.onFile} onSelectAgent={onAgent}
+                onGoalFrom={isRoom ? undefined : path => p.onContinue({ id: goal.id, label: goalTitle(goal.request), kind: 'goal', action: 'continue', files: [path] })}
+              />
+            )}
             {tab === 'graph' && (
               // With the agent's column put away, the graph shows the agent in its own side panel.
               <Graph goal={goal} events={events} selected={agent?.name} agentPanel={room.agent ? agentDetail : undefined} file={p.file} onSelect={onAgent} onFile={p.onFile} onFilesTab={() => p.onTab('files')} />
@@ -345,10 +375,9 @@ function teamSummary(goal: Goal): string {
   return [working && `${working} working`, done && `${done} done`].filter(Boolean).join(' · ');
 }
 
-function GoalHeader({ goals, goal, events, snapshot, connected, onGoal, onCommand, onSpawn, onNewGoal, onTab, onFile, onAllGoals, onNewRoom }: Props & { goal: Goal }) {
+function GoalHeader({ goals, goal, events, snapshot, connected, config, onGoal, onCommand, onSaveConfig, onSpawn, onNewGoal, onAllGoals }: Props & { goal: Goal }) {
   const confirm = useConfirm();
   const [messaging, setMessaging] = useState(false);
-  const [outcome, setOutcome] = useState(false);
   const agents = goal.agents;
   const live = goal.live && goal.status !== 'ended';
   const paused = agents.filter(a => a.state === 'paused' || a.pausing).length;
@@ -356,13 +385,6 @@ function GoalHeader({ goals, goal, events, snapshot, connected, onGoal, onComman
   const allPaused = live && paused > 0 && paused >= active;
   const leadDone = events.find(e => e.type === 'agent.done' && e.agent === goal.lead);
   const took = goal.status === 'running' ? `running ${duration(goal.createdAt)}` : leadDone ? `took ${duration(goal.createdAt, new Date(leadDone.ts).getTime())}` : `started ${ago(goal.createdAt)}`;
-  const lead = agents.find(a => a.name === goal.lead);
-  const report = useMemo(() => {
-    const paths = events.filter(e => e.type === 'shared.write').map(e => String(e.data.path));
-    return paths.find(p => /(^|\/)report\.md$/i.test(p)) ?? paths.find(p => /(^|\/)design\.md$/i.test(p));
-  }, [events]);
-
-  const hasOutcome = goal.status !== 'running' && !!lead?.doneNote;
   const [away, setAway] = useAway(snapshot?.away, onCommand);
   const meta = (
     <div className="goal-meta">
@@ -381,11 +403,6 @@ function GoalHeader({ goals, goal, events, snapshot, connected, onGoal, onComman
           i
         </span>
       )}
-      {hasOutcome && (
-        <button className={`btn ghost small${outcome ? ' on' : ''}`} onClick={() => setOutcome(o => !o)} aria-expanded={outcome}>
-          Outcome {outcome ? '▴' : '▾'}
-        </button>
-      )}
     </div>
   );
 
@@ -400,7 +417,8 @@ function GoalHeader({ goals, goal, events, snapshot, connected, onGoal, onComman
         <div className="goal-actions">
           {live && (
             <>
-              {goal.kind !== 'room' && <AwayButton away={away} onSet={setAway} />}
+              <ApprovalsSelect config={config} onSave={onSaveConfig} />
+              <AwayButton away={away} onSet={setAway} />
               <button className="btn" onClick={() => setMessaging(true)} title="Message the lead, everyone, a role or one agent">
                 ✉ Message
               </button>
@@ -421,37 +439,74 @@ function GoalHeader({ goals, goal, events, snapshot, connected, onGoal, onComman
               </button>
             </>
           )}
-          {goal.status !== 'running' && (
-            <button className="btn ghost" onClick={() => onNewRoom({ id: goal.id, label: goal.request.split('\n')[0], kind: 'goal', topic: `How did "${goal.request.split('\n')[0].slice(0, 80)}" turn out, and what's next?` })} title="Talk over how it turned out: a room that starts with this goal's outcome on its canvas">
-              Discuss in a room
-            </button>
-          )}
           {!live || goal.status !== 'running' ? <CleanButton goal={goal} onCommand={onCommand} /> : null}
         </div>
       </div>
-      {hasOutcome && outcome && lead?.doneNote && (
-        <div className="outcome">
-          <div className="kicker">
-            Outcome
-            {report && (
-              <button
-                className="btn ghost small"
-                onClick={() => {
-                  onFile(report);
-                  onTab('files');
-                }}
-              >
-                Open {report}
-              </button>
-            )}
-          </div>
-          <More lines={4}>
-            <Markdown text={lead.doneNote} />
-          </More>
-        </div>
-      )}
       {messaging && <MessageDialog goal={goal} onClose={() => setMessaging(false)} onSend={async b => !!(await onCommand(b))} />}
     </header>
+  );
+}
+
+/**
+ * What a finished goal came to, once, above its story: the lead's report, the document it wrote,
+ * and what to do next (each a new goal that continues this one, or a room to talk it over).
+ */
+function Outcome({ goal, lead, item, events, onResolve, onContinue, onFile, onNewRoom }: {
+  goal: Goal;
+  lead?: Goal['agents'][number];
+  /** The lead's report in the Inbox: following up on it wakes the lead. */
+  item?: { id: string };
+  events: MhEvent[];
+  onResolve: (item: string, decision: string, reply?: string) => void;
+  onContinue: (f: ContinueFrom) => void;
+  onFile: (path: string) => void;
+  onNewRoom: (from?: RoomFrom) => void;
+}) {
+  const [reply, setReply] = useState<string>();
+  const report = useMemo(() => {
+    const paths = [...new Set(events.filter(e => e.type === 'shared.write').map(e => String(e.data.path)))].reverse().filter(p => !p.startsWith('imported/'));
+    return paths.find(p => /(design|plan|report|review|audit)[^/]*\.md$/i.test(p));
+  }, [events]);
+  const title = goalTitle(goal.request);
+  return (
+    <div className="outcome goal-outcome">
+      <div className="kicker">
+        Outcome
+        {report && (
+          <button className="btn ghost small" onClick={() => onFile(report)}>
+            Open {report}
+          </button>
+        )}
+      </div>
+      <More lines={4}>
+        <Markdown text={lead?.doneNote || (goal.status === 'ended' ? 'The goal was ended before its lead reported.' : 'The lead stopped without a report.')} />
+      </More>
+      <div className="outcome-actions">
+        <ContinueButtons small from={{ id: goal.id, label: title, kind: 'goal' }} onContinue={onContinue} />
+        <button className="btn small ghost" onClick={() => onNewRoom({ id: goal.id, label: title, kind: 'goal', topic: `How did "${title.slice(0, 80)}" turn out, and what's next?` })} title="Talk over how it turned out: a room that starts with this goal's outcome on its canvas">
+          Discuss in a room
+        </button>
+        <span className="grow" />
+        {item &&
+          (reply === undefined ? (
+            <>
+              <button className="btn small ghost" onClick={() => setReply('')} title="Ask the lead about it: it picks up again to answer">
+                Follow up
+              </button>
+              <button className="btn small ghost" onClick={() => onResolve(item.id, 'dismiss')} title="Take its report off your updates">
+                Mark read
+              </button>
+            </>
+          ) : (
+            <span className="row">
+              <input type="text" autoFocus placeholder="Ask the lead (Enter sends)" value={reply} onChange={e => setReply(e.target.value)} onKeyDown={e => (e.key === 'Enter' && reply.trim() ? onResolve(item.id, 'dismiss', reply.trim()) : e.key === 'Escape' && setReply(undefined))} />
+              <button className="btn small primary" disabled={!reply.trim()} onClick={() => onResolve(item.id, 'dismiss', reply.trim())}>
+                Send
+              </button>
+            </span>
+          ))}
+      </div>
+    </div>
   );
 }
 

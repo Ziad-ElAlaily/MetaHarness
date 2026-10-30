@@ -644,9 +644,13 @@ export class Daemon {
    * lead follows (none: it picks one). `leadDef` runs the lead from a role that isn't in the
    * config, and `dir` works in a folder that isn't a project you opened (both for harness tests).
    */
-  startGoal(o: { request: string; project?: string; lead?: string; workflow?: string; playbook?: string; leadDef?: Role; dir?: string; fromRoom?: string }): string {
+  startGoal(o: { request: string; project?: string; lead?: string; workflow?: string; playbook?: string; leadDef?: Role; dir?: string; fromRoom?: string; from?: { goal: string; files?: string[] } }): string {
     const project = this.workPlace(o);
     const workflow = o.workflow ?? o.playbook;
+    // A room's goal continues from the room.
+    const from = o.from ?? (o.fromRoom ? { goal: o.fromRoom } : undefined);
+    const source = from && this.store.since(from.goal).find(e => e.type === 'goal.started');
+    if (from && !source) throw new Error(`There's no goal or room ${from.goal} to continue from.`);
     if (workflow && !resolveName(workflow, [...project.config.workflows.keys()]).match) {
       const names = [...project.config.workflows.keys()];
       throw new Error(`There's no workflow called "${workflow}". Workflows: ${names.join(', ') || 'none (add .metaharness/workflows/<name>.md)'}.`);
@@ -661,6 +665,8 @@ export class Daemon {
       refs: new Map(), seenOn: new Map(), workflow, chained: [], conflicts: new Map(), notes: new Map(), shared: new SharedFolder(sharedDir), sharedTouches: [],
       status: 'running', agents: new Map(), counters: new Map(), gatekeeperCost: new Map(), leadDone, resolveLeadDone,
     };
+    // What it continues from is copied in, so it outlasts that goal being deleted.
+    const imported = source ? this.importShared(String(source.data.sharedDir), sharedDir, from!.files ?? (source.data.kind === 'room' ? ['room'] : [])) : [];
     const gs = git.setupGoal(g.dir, id);
     if ('reason' in gs) g.gitNote = gs.reason;
     else {
@@ -676,9 +682,12 @@ export class Daemon {
         request: o.request, lead: leadRole, workflow: workflow ?? null, sharedDir, dir: g.dir,
         branch: g.git?.branch ?? null, base: g.git?.base ?? null, notice: this.goalNotice(g) ?? null,
         ...(o.fromRoom ? { fromRoom: o.fromRoom } : {}),
+        ...(from ? { from: { goal: from.goal, files: imported } } : {}),
       },
     });
-    const brief = o.fromRoom ? `${o.request}\n\n${this.roomBackground(o.fromRoom)}` : o.request;
+    for (const c of g.shared.scan()) this.sharedChanged(g, c);
+    const background = !source ? '' : source.data.kind === 'room' ? this.roomBackground(from!.goal, sharedDir) : this.goalBackground(from!.goal, imported);
+    const brief = background ? `${o.request}\n\n${background}` : o.request;
     const r = this.spawnAgent(id, { role: leadRole, roleDef: o.leadDef, brief, parent: 'human', isLead: true, workflow });
     if (!r.ok) {
       g.status = 'ended';
@@ -3430,11 +3439,49 @@ export class Daemon {
     this.tellLead(g, `[Room] The human branched ${cards.join(', ')} into a room of its own (${to}): leave that topic to it.`);
   }
 
-  /** For a goal started from a room: where the lead finds what the room settled. */
-  private roomBackground(roomId: string): string {
+  /**
+   * Copies files or folders (relative to one goal's shared folder) into another's `imported/`.
+   * Returns the paths copied, relative to `from`.
+   */
+  private importShared(from: string, to: string, paths: string[]): string[] {
+    const out: string[] = [];
+    for (const p of paths) {
+      const rel = normalize(p).split(sep).join('/').replace(/^\/+/, '');
+      if (!rel || rel === '.' || rel.startsWith('..') || rel.split('/')[0] === HISTORY) continue;
+      const src = join(from, rel);
+      if (!existsSync(src)) continue;
+      const copy = (s: string, r: string) => {
+        if (statSync(s).isDirectory()) {
+          for (const e of readdirSync(s)) if (e !== HISTORY) copy(join(s, e), `${r}/${e}`);
+          return;
+        }
+        mkdirSync(dirname(join(to, 'imported', r)), { recursive: true });
+        copyFileSync(s, join(to, 'imported', r));
+      };
+      copy(src, rel);
+      out.push(rel);
+    }
+    return out;
+  }
+
+  /** For a goal that continues another: what that one came to, and what was copied from it. */
+  private goalBackground(goalId: string, imported: string[]): string {
+    const r = replayGoal(this.store.since(goalId));
+    const live = this.goals.get(goalId);
+    const request = (live?.request ?? r?.request ?? '').split('\n')[0];
+    const note = (live ? live.agents.get(live.lead)?.doneNote : r?.agents.get(r.lead)?.doneNote)?.trim();
+    return [
+      `[MetaHarness] This goal continues an earlier one (${goalId}): ${request}`,
+      ...(note ? ['What it came to, in its lead\'s words:', note] : []),
+      ...(imported.length ? [`Copied from its shared folder into yours: ${imported.map(p => `imported/${p}`).join(', ')}. Read them before you plan.`] : []),
+    ].join('\n');
+  }
+
+  /** For a goal started from a room: where the lead finds what the room settled (its board, copied in). */
+  private roomBackground(roomId: string, sharedDir: string): string {
     const start = this.store.since(roomId).find(e => e.type === 'goal.started');
     if (!start) return '';
-    const shared = String(start.data.sharedDir);
+    const shared = join(sharedDir, 'imported');
     const design = ['room/design.md', 'design.md'].map(p => join(shared, p)).find(p => existsSync(p));
     return [
       `[MetaHarness] This goal comes out of a brainstorm room (${roomId}) on: ${String(start.data.request).split('\n')[0]}`,
@@ -4371,24 +4418,52 @@ export class Daemon {
     };
   }
 
+  /** The documents in a goal's shared folder, latest first: what a goal continuing it can take along. */
+  goalDocs(goalId: string): { path: string; size: number; at: string }[] {
+    const start = this.store.since(goalId).find(e => e.type === 'goal.started');
+    if (!start) throw new Error(`There's no goal ${goalId}.`);
+    const dir = String(start.data.sharedDir);
+    const out: { path: string; size: number; at: string }[] = [];
+    const walk = (d: string) => {
+      let entries;
+      try {
+        entries = readdirSync(d, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of entries) {
+        const full = join(d, e.name);
+        if (e.isDirectory()) {
+          if (e.name !== HISTORY) walk(full);
+        } else if (/\.(md|txt|json|ya?ml|csv)$/i.test(e.name)) {
+          const st = statSync(full);
+          out.push({ path: relative(dir, full).split(sep).join('/'), size: st.size, at: st.mtime.toISOString() });
+        }
+      }
+    };
+    walk(dir);
+    return out.sort((a, b) => b.at.localeCompare(a.at));
+  }
+
   /** Every goal in the log, newest first: the Goals list. */
   listGoals() {
     // What the Goals list shows of each: its outcome (the lead's note), who's at work, what waits for the human.
-    const summary = (v: ReturnType<Daemon['goalView']>) => ({
+    const summary = (v: ReturnType<Daemon['goalView']>, started: MhEvent) => ({
       id: v.id, kind: v.kind, request: v.request, status: v.status, live: v.live, createdAt: v.createdAt, dir: v.dir, project: v.project, lead: v.lead, cost: v.cost,
       agents: v.agents.length, working: v.agents.filter(a => ['starting', 'working', 'waiting', 'limited'].includes(a.state)).length,
       branch: v.branch, workflow: v.workflow, result: v.agents.find(a => a.name === v.lead)?.doneNote ?? null,
       inbox: this.humanInbox.filter(i => i.goal === v.id).length,
       /** Approvals, decisions and questions: an agent waits on each. */
       needs: this.humanInbox.filter(i => i.goal === v.id && ['approval', 'decision', 'question'].includes(i.kind)).length,
+      from: continuesFrom(started.data),
     });
     return this.store
       .ofType('goal.started')
       .map(e => {
         const g = this.goals.get(e.goal);
-        if (g) return summary(this.goalView(g));
+        if (g) return summary(this.goalView(g), e);
         const r = replayGoal(this.store.since(e.goal));
-        return r ? summary(this.replayView(r)) : undefined;
+        return r ? summary(this.replayView(r), e) : undefined;
       })
       .filter(<T>(x: T | undefined): x is T => x !== undefined)
       .reverse();
@@ -4421,7 +4496,8 @@ export class Daemon {
       case 'goal.start': {
         const request = s('request');
         if (!request) throw new Error('goal.start needs a request.');
-        const goal = this.startGoal({ request, project: s('project'), lead: s('lead'), workflow: s('workflow') ?? s('playbook'), fromRoom: s('fromRoom') });
+        const from = s('from') ? { goal: s('from')!, files: Array.isArray(b.files) ? b.files.map(String) : undefined } : undefined;
+        const goal = this.startGoal({ request, project: s('project'), lead: s('lead'), workflow: s('workflow') ?? s('playbook'), fromRoom: s('fromRoom'), from });
         return { goal, notice: this.goalNotice(this.goals.get(goal)!) ?? null };
       }
       case 'room.start': {
@@ -4575,6 +4651,8 @@ export class Daemon {
         const file = this.keepNote(String(b.goal), String(b.id), b.scope ? String(b.scope) : 'repo');
         return { result: `Saved as a rule in ${file}: agents get it in future goals too.`, file };
       }
+      case 'goal.docs':
+        return { docs: this.goalDocs(s('goal') ?? '') };
       case 'goal.sizes':
         return { sizes: this.goalSizes() };
       case 'goal.open_folder':
@@ -5252,4 +5330,18 @@ function ago(ms: number): string {
 /** A time of day for messages, e.g. 18:20. */
 function clock(ms: number): string {
   return new Date(ms).toTimeString().slice(0, 5);
+}
+
+/**
+ * The goal or room a goal continues: the one it was started from, or, for goals from before that
+ * was recorded, the one whose shared folder its request names.
+ */
+export function continuesFrom(started: Record<string, unknown>): string | null {
+  // A goal records { goal, files }; a room seeded from another, its id.
+  const from = started.from as { goal?: string } | string | null | undefined;
+  if (typeof from === 'string') return from;
+  if (from?.goal) return from.goal;
+  if (typeof started.fromRoom === 'string') return started.fromRoom;
+  const m = /\.metaharness\/goals\/([0-9a-f]{8})\//.exec(String(started.request ?? ''));
+  return m ? m[1] : null;
 }

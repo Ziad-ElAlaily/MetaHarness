@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type { ApprovalMode, ConfigView } from '../types.ts';
 
 /**
  * Whether you're away (the daemon's, for every goal), said at once when you change it; the next
@@ -46,5 +47,34 @@ export function AwayNote({ compact }: { compact?: boolean }) {
         </>
       )}
     </div>
+  );
+}
+
+const MODES: [ApprovalMode, string, string][] = [
+  ['ask', 'Ask me', 'Whatever the fixed rules don’t settle comes to your Inbox'],
+  ['gatekeeper', 'Gatekeeper', 'A cheap model allows what’s safe, refuses what’s harmful, and asks you about the rest'],
+  ['harness', 'Harness’s own', 'Each harness’s automatic approvals where it has them; the gatekeeper, then you, for the rest'],
+  ['allow', 'Allow in project', 'What stays in the project runs without asking; what reaches outside goes to the gatekeeper, then the lead'],
+];
+
+/**
+ * How approvals are decided in this project, beside the away switch: saved to the project's
+ * settings (your personal ones if it has none), as Settings does.
+ */
+export function ApprovalsSelect({ config, onSave }: { config?: ConfigView; onSave: (b: Record<string, unknown>) => Promise<unknown> }) {
+  if (!config) return null;
+  const mode = config.settings.effective.approvals;
+  const scope = config.scopes.some(s => s.scope === 'repo') ? 'repo' : 'personal';
+  return (
+    <label className="approvals-select" title={`${MODES.find(m => m[0] === mode)?.[2] ?? ''}. More in Settings.`}>
+      <span className="muted">Approvals</span>
+      <select value={mode} onChange={e => void onSave({ cmd: 'settings.save', scope, patch: { approvals: e.target.value } })} aria-label="Approvals">
+        {MODES.map(([m, label, hint]) => (
+          <option key={m} value={m} title={hint}>
+            {label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }

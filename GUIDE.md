@@ -160,7 +160,7 @@ side bar shows the project you're in and switches between them. Each project's g
 and setup are its own, and its agents work in it and nowhere else (section 7).
 
 `mh ui` opens the app in your browser and signs you in with the daemon's token, which lives in
-`~/.metaharness/token`. In a project, it opens on **Home**: describe what you want under **Start a goal**,
+`~/.metaharness/token`. In a project, it opens on **Home**: click **+ New goal** and describe what you want,
 as you would to a colleague. Leave the lead as `architect`, and leave the workflow on "let the
 lead choose" or pick one:
 
@@ -191,15 +191,24 @@ You review the result in your checkout like any other change, and push it yourse
 ## 6. Steering the team
 
 **The web app** has a rail on the left: **Home**, **Goals**, **Rooms**, **Ask**, and
-**Setup** (roles, workflows, guidelines, tools).
+**Setup**. Setup is one page with its parts across the top: **Team** (roles, workflows,
+guidelines), **Behaviour** (rules, settings) and **Machine** (harnesses, tools and skills).
 
-- **Home:** what needs you across every goal, a box to start a goal (or open a room to talk it
-  over first), the running goals, the open rooms, and past goals with what came of each
-  (searchable).
+- **Home:** your plan limits (with **Check now**), what needs you across every goal, how
+  approvals are decided and the **I'm away** switch, what's running (goals and rooms), and your
+  **lines of work**: goals and rooms grouped by what continues what (a room → its plan → the
+  implementation → a review), each with what its latest step came to and buttons to go on from
+  it (searchable). **+ New goal** and **+ New room** are at the top.
 - **Goals** opens on the running goal (or the latest). **+ New goal** is the first button in its
   header. The goal's name beside it is a menu: other goals and **All goals…**, the full list
-  with sizes on disk, where you delete the ones you're done with. A finished goal has
-  **Discuss in a room**.
+  with sizes on disk, where you delete the ones you're done with.
+- **Going on from a goal:** a finished goal's **Outcome** (above its story) and each line of
+  work on Home have **Implement**, **Review** and **Continue…**; a room has **→ Goal**, and a
+  file in the **Files** tab has **New goal from this**. Each opens a new goal that continues
+  it: you pick which of its documents to take along (its design or report is picked for you),
+  and they're copied into the new goal's shared folder under `imported/`, so deleting the old
+  goal later loses nothing. The new lead gets the old goal's outcome and is told where the
+  copies are. A room's whole board, design and chat are copied the same way.
 - **Rooms:** brainstorms for getting clear and deciding (below).
 - **Ask** (in the left rail, from any page): an assistant for questions about your goals and
   setup. It looks things up in the logs, shared files, costs and config. When you ask for a
@@ -212,14 +221,17 @@ You review the result in your checkout like any other change, and push it yourse
   and it can look at the others. It reads only, unless you switch it to **Write**: then it may
   edit files and run any command in the project, for a task you give it. A new conversation
   starts in read only again.
-- **Goal:** the request, status, time, cost and branch in one line at the top, with the lead's
-  final note under **Outcome ▾** once it's done. Below that:
+- **Goal:** the request, status, time, cost and branch in one line at the top, with how
+  approvals are decided and **I'm away** while it runs. Once it's done, its **Outcome** (the
+  lead's final note, the document it wrote, what to do next, and **Follow up** to ask the lead
+  about it) sits above the story. Below that:
   - **Needs you** (center, highlighted): what an agent is waiting on.
     - **Approvals:** a command an agent wants to run. Approve, or deny (add a note if you like).
     - **Decisions:** "approve this design". Approve, or send it back saying what to change.
     - **Questions:** answer in the box.
   - **Team** (left): who spawned whom, with each agent's state, status line, cost and context
     use. **Updates** below it: results from agents that report to you; clear them, or follow up.
+    (The lead's own report is the goal's Outcome once the goal is over.)
   - **Make room:** the buttons at the right end of the tabs show or hide the team column, the
     goal's header (its name and status move into the tab row; click it to bring the header
     back) and the agent column; **⤢** puts all three away at once, **⤡** brings them back.
@@ -228,6 +240,8 @@ You review the result in your checkout like any other change, and push it yourse
     a name in the panel or in Git) slides in over the right side; **Esc** or **×** closes it,
     **Pin as a column** brings the column back.
   - **Center tabs:**
+    Five tabs: **Story**, **Graph**, **Design**, **Files**, **Costs**; Story and Graph switch
+    between views beside the tabs.
     - **Story** (the default): what happened, the important parts first. Who started whom,
       messages, results, commits, problems and your answers are cards; the steps in between
       (status lines, tool calls, file updates) fold into one line you can open.
@@ -391,17 +405,17 @@ You review the result in your checkout like any other change, and push it yourse
         - **Changes in this scope** marks the links, functions and classes the scope added,
           edited or removed, and the panel lists them as sentences ("World.step calls
           FoodLeads.tick").
-    - **Git:** the goal branch, each agent's branch (merged or not, uncommitted files), and
-      every commit and merge with who made it, its size, and the areas of the design it
-      touched (click one to open the Design tab there, at that commit). Click a commit for its
-      diff (**Open in Design** shows what it did to the design); **Whole
-      goal** shows everything since the goal started (what a pull request would hold), and
-      **Uncommitted** what's changed but not committed, in your checkout or an agent's
-      worktree.
+    - **Design → Commits** (the third lens, beside Areas and Systems): the goal branch, each
+      agent's branch (merged or not, uncommitted files), and every commit and merge with who
+      made it, its size, and the areas of the design it touched (click one to see it on the
+      map, at that commit). Click a commit for its diff (**On the map** shows what it did to the
+      design); **Whole goal** shows everything since the goal started (what a pull request
+      would hold), and **Uncommitted** what's changed but not committed, in your checkout or an
+      agent's worktree. An agent's commits in its **Changes** open here.
     - **Files:** the shared folder: designs, reviews and reports, rendered, with every version
       and who wrote it.
-    - **Graph**, **Sequence**, **Timeline:** who talks to whom, messages in order, who was
-      busy when. The graph is live: each card shows the step its agent is on and for how long,
+    - **Graph**, with its views **Map**, **Messages** and **Busy:** who talks to whom,
+      messages in order, who was busy when. The graph is live: each card shows the step its agent is on and for how long,
       messages it hasn't received yet, and approvals waiting on you; a dot runs along a line as
       a message is sent, and a dashed line goes from an agent in `wait` to whoever it waits on.
       The panel beside it follows the team's messages (or everything it does); click a line
@@ -409,7 +423,7 @@ You review the result in your checkout like any other change, and push it yourse
       cards to arrange them; the layout is kept for that goal.
     - **Costs:** where the money went, by agent, role or model, split into input, cache
       reads, cache writes and output.
-    - **Log:** every event, as `mh tail` shows it.
+    - **Story → Every event:** every event, as `mh tail` shows it, with filters.
   - **Agent** (right): what the selected agent is doing now (or its result), its controls, and
     its conversation (its words, messages, and its tool calls folded into groups), its
     **changes** (its commits, the files it edited, its uncommitted work), its brief, and its
@@ -508,11 +522,11 @@ Home, or a room's header): what to talk about, and the makers.
   you decide: decision cards are what you agreed to.
 - **Where it goes** (header): **End room** when you're clear (that's an outcome too); **Write
   the design** has the lead write `room/design.md` from the board, citing its cards; **→ Goal**
-  points a goal's lead at the board (concept, decisions, kept values, demos, images) and the
-  design; **New room from this** starts a fresh room with this board, its images and demos.
+  copies the room's folder into the new goal (`imported/room/`) and points its lead at the board
+  (concept, decisions, kept values, demos, images) and the design; **New room from this** starts a fresh room with this board, its images and demos.
 - Images and demos live in the room's shared folder (`room/media/`, `room/demos/`). Makers may
   generate images without asking in a room (you're watching; **■** stops one).
-- Rooms open with the team and agent columns put away; click a name to slide its panel in, or
+- A room's tabs are **Room**, **Files** and **Costs**. Rooms open with the team and agent columns put away; click a name to slide its panel in, or
   bring the columns back with the toggles at the top right.
 - A room lasts one sitting: after a daemon restart, start a new room from it.
 

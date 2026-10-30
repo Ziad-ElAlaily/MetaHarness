@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { startServer } from '../src/server.ts';
+import { continuesFrom } from '../src/daemon.ts';
 import { resolveName } from '../src/fuzzy.ts';
 import { makeDaemon, settle, withTimeout } from './helpers.ts';
 
@@ -121,6 +122,28 @@ test('a slow quick helper hands control back and answers later', async () => {
   const note = await withTimeout(d.goals.get(goal)!.leadDone, 5000, 'lead done');
   assert.match(note, /scout-1 is still working/);
   assert.match(note, /scout-1: the slow answer/);
+  await d.close();
+});
+
+test('a goal continues an earlier one: its documents are copied in, its outcome reaches the lead, the list links them', async () => {
+  const d = makeDaemon();
+  const first = d.startGoal({ request: 'Add per-user rate limiting to /api/upload', playbook: 'feature' });
+  await withTimeout(d.goals.get(first)!.leadDone, 5000, 'lead done');
+  await settle();
+  const docs = (await d.command({ cmd: 'goal.docs', goal: first })).docs as { path: string }[];
+  assert.ok(docs.some(x => x.path === 'design.md'), 'its documents are listed');
+  assert.ok(!docs.some(x => x.path.startsWith('.history')), 'not their history');
+
+  const r = await d.command({ cmd: 'goal.start', request: 'Review this design', from: first, files: ['design.md', '../escape', 'missing.md'] });
+  const next = String(r.goal);
+  const g = d.goals.get(next)!;
+  assert.equal(readFileSync(join(g.sharedDir, 'imported', 'design.md'), 'utf8'), readFileSync(join(d.goals.get(first)!.sharedDir, 'design.md'), 'utf8'));
+  const brief = d.agent(next, g.lead)!.brief;
+  assert.match(brief, /continues an earlier one[\s\S]*came to[\s\S]*imported\/design\.md/);
+  assert.doesNotMatch(brief, /escape|missing/);
+  assert.equal(d.listGoals().find(x => x.id === next)?.from, first);
+  assert.ok(d.store.since(next).some(e => e.type === 'shared.write' && e.data.path === 'imported/design.md'), 'the Files tab shows the copy');
+  assert.equal(continuesFrom({ request: 'implement /home/me/.metaharness/goals/0123abcd/shared/design.md' }), '0123abcd', 'older goals are linked by the path in their request');
   await d.close();
 });
 

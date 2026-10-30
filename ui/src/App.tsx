@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { api, ApiError, loadToken, setToken } from './api.ts';
 import { useGoal } from './useGoal.ts';
 import type { ConfigView, GoalSummary, ProjectSummary } from './types.ts';
-import { SpawnDialog, StartGoalDialog } from './components/Dialogs.tsx';
+import { SpawnDialog, StartGoalDialog, type ContinueFrom } from './components/Dialogs.tsx';
 import { ConfirmProvider, ErrorBoundary, useToast } from './components/common.tsx';
 import { Home } from './pages/Home.tsx';
 import { GoalPage, type GoalTab, type RoomFrom } from './pages/GoalPage.tsx';
@@ -18,7 +18,25 @@ import { Tools } from './pages/Tools.tsx';
 import { Goals } from './pages/Goals.tsx';
 import { Projects } from './pages/Projects.tsx';
 
-type Page = 'home' | 'projects' | 'goal' | 'room' | 'goals' | 'roles' | 'workflows' | 'rules' | 'guidelines' | 'tools' | 'harnesses' | 'settings';
+type Page = 'home' | 'projects' | 'goal' | 'room' | 'goals' | SetupPage;
+type SetupPage = 'roles' | 'workflows' | 'rules' | 'guidelines' | 'tools' | 'harnesses' | 'settings';
+
+/** Setup's pages, in groups: one entry in the rail, a strip across the top of each. */
+const SETUP: [string, [SetupPage, string, string][]][] = [
+  ['Team', [['roles', 'Roles', 'The teammates a goal can use'], ['workflows', 'Workflows', 'How to run one kind of task, step by step'], ['guidelines', 'Guidelines', 'How every agent should work with the rest of the team']]],
+  ['Behaviour', [['rules', 'Rules', 'Short notes agents get at the moment they matter'], ['settings', 'Settings', 'Approvals, prompt caches, plan limits, keeping agents going']]],
+  ['Machine', [['harnesses', 'Harnesses', 'The agent CLIs on this machine, their models and prices'], ['tools', 'Tools & skills', 'MCP servers and skills roles can carry']]],
+];
+const SETUP_PAGES = SETUP.flatMap(([, pages]) => pages.map(([p]) => p));
+const SETUP_KEY = 'mh.setup.page';
+function lastSetup(): SetupPage {
+  try {
+    const p = localStorage.getItem(SETUP_KEY) as SetupPage | null;
+    return p && SETUP_PAGES.includes(p) ? p : 'roles';
+  } catch {
+    return 'roles';
+  }
+}
 
 /** Where you are, kept in the address so a reload or a shared link comes back to it. */
 interface Place {
@@ -82,7 +100,7 @@ function Shell() {
   const [loaded, setLoaded] = useState(false);
   const [config, setConfig] = useState<ConfigView>();
   const [place, setPlace] = useState<Place>(readHash);
-  const [dialog, setDialog] = useState<{ kind: 'goal'; workflow?: string; request?: string; fromRoom?: string } | { kind: 'spawn'; parent?: string } | { kind: 'room'; from?: RoomFrom }>();
+  const [dialog, setDialog] = useState<{ kind: 'goal'; workflow?: string; request?: string; from?: ContinueFrom } | { kind: 'spawn'; parent?: string } | { kind: 'room'; from?: RoomFrom }>();
   const { toast, say } = useToast();
   const [asking, setAsking] = useState(false);
   const refreshGoal = useRef<() => Promise<void>>(undefined);
@@ -175,7 +193,8 @@ function Shell() {
     }
     seenSeq.current = last;
   }, [events, say]);
-  useEffect(() => void (seenSeq.current = undefined), [goalId]);
+  // Another goal or room: its old warnings aren't news.
+  useEffect(() => void (seenSeq.current = undefined), [shownId]);
 
   // An address naming a goal of another project you opened opens that project.
   useEffect(() => {
@@ -244,6 +263,16 @@ function Shell() {
   const currentRoom = rooms.find(g => g.id === roomId);
   const allKind = place.page === 'goals' && place.item === 'rooms' ? 'room' : 'goal';
   const setup = (page: Page) => ({ selected: place.page === page ? place.item : undefined, onSelect: (item?: string) => go({ item }), onSave: saveConfig, onCommand: command, config });
+  const onSetup = SETUP_PAGES.includes(place.page as SetupPage);
+  const goSetup = (page: SetupPage) => {
+    try {
+      localStorage.setItem(SETUP_KEY, page);
+    } catch {
+      // Remembered for this visit only.
+    }
+    go({ page, item: undefined });
+  };
+  const continueFrom = (from: ContinueFrom) => setDialog({ kind: 'goal', from });
 
   return (
     <div className="shell">
@@ -273,14 +302,7 @@ function Shell() {
         />
         <RailButton icon={ICONS.ask} label="Ask" on={asking} onClick={() => setAsking(a => !a)} />
         <div className="rail-sep" />
-        <div className="rail-group">Setup</div>
-        <RailButton icon={ICONS.roles} label="Roles" on={place.page === 'roles'} onClick={() => go({ page: 'roles', item: undefined })} />
-        <RailButton icon={ICONS.workflows} label="Workflows" on={place.page === 'workflows'} onClick={() => go({ page: 'workflows', item: undefined })} />
-        <RailButton icon={ICONS.rules} label="Rules" on={place.page === 'rules'} onClick={() => go({ page: 'rules', item: undefined })} />
-        <RailButton icon={ICONS.guide} label="Guidelines" on={place.page === 'guidelines'} onClick={() => go({ page: 'guidelines', item: undefined })} />
-        <RailButton icon={ICONS.tools} label="Tools" on={place.page === 'tools'} onClick={() => go({ page: 'tools', item: undefined })} />
-        <RailButton icon={ICONS.harness} label="Harnesses" on={place.page === 'harnesses'} onClick={() => go({ page: 'harnesses', item: undefined })} />
-        <RailButton icon={ICONS.settings} label="Settings" on={place.page === 'settings'} onClick={() => go({ page: 'settings', item: undefined })} />
+        <RailButton icon={ICONS.settings} label="Setup" on={onSetup} onClick={() => goSetup(onSetup ? (place.page as SetupPage) : lastSetup())} />
       </nav>
 
       <main className="content">
@@ -298,8 +320,10 @@ function Shell() {
             onOpen={(g, agent) => go({ page: 'goal', goal: g, agent, tab: place.tab === 'thread' ? 'story' : (place.tab ?? 'story'), file: undefined })}
             onOpenRoom={r => go({ page: 'room', room: r, agent: undefined, tab: 'thread', file: undefined })}
             onNewRoom={() => setDialog({ kind: 'room' })}
-            onStart={startGoal}
+            onNewGoal={() => setDialog({ kind: 'goal' })}
+            onContinue={continueFrom}
             onCommand={command}
+            onSaveConfig={saveConfig}
             onSetup={() => go({ page: 'roles', item: 'new' })}
             onAllGoals={() => go({ page: 'goals', item: undefined })}
           />
@@ -342,7 +366,8 @@ function Shell() {
             rooms={rooms}
             config={config}
             onNewRoom={from => setDialog({ kind: 'room', from })}
-            onGoalFromRoom={(room, topic) => setDialog({ kind: 'goal', request: `Carry out what the room settled: ${topic.split('\n')[0]}`, fromRoom: room })}
+            onContinue={from => setDialog({ kind: 'goal', from, ...(from.kind === 'room' ? { request: `Carry out what the room settled: ${from.label}` } : {}) })}
+            onSaveConfig={saveConfig}
             onAllGoals={() => go({ page: 'goals', item: undefined })}
             onAllRooms={() => go({ page: 'goals', item: 'rooms' })}
             loaded={loaded}
@@ -367,6 +392,7 @@ function Shell() {
             onHarnesses={() => go({ page: 'harnesses', item: undefined })}
           />
         )}
+        {onSetup && <SetupNav page={place.page as SetupPage} onPage={goSetup} />}
         {place.page === 'roles' && <Roles {...setup('roles')} />}
         {place.page === 'workflows' && <Workflows {...setup('workflows')} onStartWith={workflow => setDialog({ kind: 'goal', workflow })} />}
         {place.page === 'rules' && <Rules {...setup('rules')} />}
@@ -388,7 +414,7 @@ function Shell() {
         </ErrorBoundary>
       </main>
 
-      {dialog?.kind === 'goal' && <StartGoalDialog key={dialog.workflow} config={config} initialWorkflow={dialog.workflow} initialRequest={dialog.request} fromRoom={dialog.fromRoom} onClose={() => setDialog(undefined)} onStart={startGoal} />}
+      {dialog?.kind === 'goal' && <StartGoalDialog key={`${dialog.workflow}/${dialog.from?.id}/${dialog.from?.action}`} config={config} initialWorkflow={dialog.workflow} initialRequest={dialog.request} from={dialog.from} onClose={() => setDialog(undefined)} onStart={startGoal} />}
       {dialog?.kind === 'room' && (
         <NewRoomDialog
           config={config}
@@ -440,6 +466,24 @@ function Shell() {
   );
 }
 
+/** Setup's pages in their groups, across the top of each. */
+function SetupNav({ page, onPage }: { page: SetupPage; onPage: (p: SetupPage) => void }) {
+  return (
+    <nav className="setup-nav" aria-label="Setup">
+      {SETUP.map(([group, pages]) => (
+        <span key={group} className="setup-group">
+          <span className="setup-group-name">{group}</span>
+          {pages.map(([p, label, title]) => (
+            <button key={p} className={`tab${page === p ? ' on' : ''}`} title={title} aria-current={page === p ? 'page' : undefined} onClick={() => onPage(p)}>
+              {label}
+            </button>
+          ))}
+        </span>
+      ))}
+    </nav>
+  );
+}
+
 function RailButton({ icon, label, on, badge, dot, disabled, onClick }: { icon: ReactNode; label: string; on?: boolean; badge?: number; dot?: boolean; disabled?: boolean; onClick: () => void }) {
   return (
     <button className={`rail-btn${on ? ' on' : ''}`} onClick={onClick} disabled={disabled} aria-current={on ? 'page' : undefined} title={label}>
@@ -474,41 +518,6 @@ const ICONS = {
     </>,
   ),
   ask: svg(<path d="M5 5h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-8l-4 3.5V16H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM9 10h.01M12 10h.01M15 10h.01" />),
-  roles: svg(
-    <>
-      <circle cx="9" cy="8" r="3.2" />
-      <path d="M3.5 19c.8-3.2 3-5 5.5-5s4.7 1.8 5.5 5" />
-      <circle cx="17" cy="9" r="2.4" />
-      <path d="M16 14.2c2.2.2 3.8 1.8 4.5 4.3" />
-    </>,
-  ),
-  workflows: svg(
-    <>
-      <rect x="3" y="4" width="6" height="5" rx="1" />
-      <rect x="15" y="4" width="6" height="5" rx="1" />
-      <rect x="9" y="15" width="6" height="5" rx="1" />
-      <path d="M9 6.5h6M18 9v3H12v3" />
-    </>,
-  ),
-  rules: svg(
-    <>
-      <path d="M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6z" />
-      <path d="M9 12l2 2 4-4" />
-    </>,
-  ),
-  guide: svg(
-    <>
-      <path d="M5 4h10l4 4v12H5z" />
-      <path d="M8 11h8M8 15h8M8 7h4" />
-    </>,
-  ),
-  tools: svg(<path d="M14.5 6.5a4 4 0 0 0-5.3 5.3L4 17l3 3 5.2-5.2a4 4 0 0 0 5.3-5.3l-2.6 2.6-2.4-.6-.6-2.4z" />),
-  harness: svg(
-    <>
-      <rect x="4" y="5" width="16" height="11" rx="1.5" />
-      <path d="M8 20h8M12 16v4M7.5 9.5l2 1.5-2 1.5M11.5 12.5h4" />
-    </>,
-  ),
   settings: svg(
     <>
       <circle cx="12" cy="12" r="3" />

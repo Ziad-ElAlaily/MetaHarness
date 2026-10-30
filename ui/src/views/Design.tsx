@@ -12,6 +12,7 @@ import { DocTip, useDocs } from '../components/DocTip.tsx';
 import { Splitter } from '../components/Splitter.tsx';
 import { useNow } from '../components/common.tsx';
 import Systems, { type SystemsNav } from './Systems.tsx';
+import Git, { type GitSel } from './Git.tsx';
 
 const CW = 230;
 const CH = 180;
@@ -22,8 +23,8 @@ export interface DesignNav {
   scope?: ScopeSel;
   area?: string;
   focus?: string;
-  /** Areas: the files and what changed; Systems: how the code runs. */
-  lens?: 'areas' | 'systems';
+  /** Areas: the files and what changed; Systems: how the code runs; Commits: the history and its diffs. */
+  lens?: 'areas' | 'systems' | 'commits';
   systems?: SystemsNav;
 }
 
@@ -34,7 +35,9 @@ interface Props {
   onNav: (n: DesignNav) => void;
   onCommand: (body: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>;
   onSelectAgent: (n: string) => void;
-  onOpenCommit: (sha: string) => void;
+  /** What the Commits lens shows: kept by the goal page, so an agent's changes can open it. */
+  gitSel?: GitSel;
+  onGitSel: (s: GitSel) => void;
 }
 
 interface Layers {
@@ -87,7 +90,9 @@ const sameScope = (a: ScopeSel, b: ScopeSel) => JSON.stringify(a) === JSON.strin
  * hotspots, live activity), and the inspector goes from an area to its files, their
  * definitions, and the diff of one definition.
  */
-export default function Design({ goal, events, nav, onNav, onCommand, onSelectAgent, onOpenCommit }: Props) {
+export default function Design({ goal, events, nav, onNav, onCommand, onSelectAgent, gitSel, onGitSel }: Props) {
+  // A commit opened from the map shows in the Commits lens, its diff beside the history.
+  const onOpenCommit = (sha: string) => (onGitSel({ kind: 'commit', sha }), onNav({ ...nav, lens: 'commits' }));
   const scope: ScopeSel = nav.scope ?? { kind: 'goal' };
   const [view, setView] = useState<DesignScopeView>();
   const [gitv, setGitv] = useState<GitView>();
@@ -160,20 +165,31 @@ export default function Design({ goal, events, nav, onNav, onCommand, onSelectAg
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  if (error && !view) return <div className="empty warn-text">{error}</div>;
-  if (view && !view.snapshot) return <div className="empty">{view.note}</div>;
-  if (!snap || !view) return <div className="empty">Reading the code…</div>;
-  const area = nav.area !== undefined && (snap.map.areas.some(a => a.path === nav.area) || view.removedAreas?.some(a => a.path === nav.area)) ? nav.area : undefined;
   const lens = (
     <div className="seg" role="group" aria-label="Lens">
-      <button className={`btn small${nav.lens !== 'systems' ? ' on' : ''}`} onClick={() => onNav({ ...nav, lens: 'areas' })} title="The code's areas and files, and what each scope changed in them">
+      <button className={`btn small${!nav.lens || nav.lens === 'areas' ? ' on' : ''}`} onClick={() => onNav({ ...nav, lens: 'areas' })} title="The code's areas and files, and what each scope changed in them">
         Areas
       </button>
       <button className={`btn small${nav.lens === 'systems' ? ' on' : ''}`} onClick={() => onNav({ ...nav, lens: 'systems' })} title="How the code runs: what calls, signals, creates and changes what">
         Systems
       </button>
+      <button className={`btn small${nav.lens === 'commits' ? ' on' : ''}`} onClick={() => onNav({ ...nav, lens: 'commits' })} title="Commits, branches and uncommitted work, with their diffs">
+        Commits
+      </button>
     </div>
   );
+  if (nav.lens === 'commits') {
+    return (
+      <Git
+        goal={goal} events={events} sel={gitSel} onSel={onGitSel} onSelectAgent={onSelectAgent} lens={lens}
+        onOpenDesign={(sha, a) => (setLock(undefined), onNav({ ...nav, lens: 'areas', scope: { kind: 'commit', sha }, area: a }))}
+      />
+    );
+  }
+  if (error && !view) return <div className="empty warn-text">{error}</div>;
+  if (view && !view.snapshot) return <div className="empty">{view.note}</div>;
+  if (!snap || !view) return <div className="empty">Reading the code…</div>;
+  const area = nav.area !== undefined && (snap.map.areas.some(a => a.path === nav.area) || view.removedAreas?.some(a => a.path === nav.area)) ? nav.area : undefined;
   const scopeBar = (tools: ReactNode) => (
     <ScopeBar
       goal={goal} events={events} gitv={gitv} view={view} scope={scope} color={color} focus={nav.focus} tools={tools} lock={lock}
@@ -362,8 +378,8 @@ function CommitPanel({ goal, events, view, sha, color, onPeek, onScope, onOpenCo
         <button className="btn small" onClick={() => onScope({ kind: 'commit', sha })} title="Make this commit the scope: the map shows only what it changed">
           Look at only this commit
         </button>
-        <button className="btn ghost small" onClick={() => onOpenCommit(sha)} title="Open it in the Git tab">
-          Open in Git
+        <button className="btn ghost small" onClick={() => onOpenCommit(sha)} title="Its diff in the Commits lens">
+          Its diff
         </button>
       </div>
       <div className="section-title">
@@ -1554,7 +1570,7 @@ function ScopeSummary({ goal, events, snap, view, found, color, focus, flow, onF
       {!commits.length && <div className="muted small">None in this scope.</div>}
       {view.scope?.kind === 'commit' && (
         <button className="text-link small" onClick={() => onOpenCommit(view.scope!.to)}>
-          Open this commit in the Git tab
+          This commit’s diff
         </button>
       )}
       <div className="section-title">Hotspots</div>

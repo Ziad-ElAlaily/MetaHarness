@@ -40,7 +40,7 @@ export function filesOf(events: MhEvent[]): FileInfo[] {
   return [...files.values()].sort((a, b) => a.path.localeCompare(b.path));
 }
 
-export function Files({ goal, events, selected, onSelect, onSelectAgent }: { goal: Goal; events: MhEvent[]; selected?: string; onSelect: (path: string) => void; onSelectAgent: (n: string) => void }) {
+export function Files({ goal, events, selected, onSelect, onSelectAgent, onGoalFrom }: { goal: Goal; events: MhEvent[]; selected?: string; onSelect: (path: string) => void; onSelectAgent: (n: string) => void; onGoalFrom?: (path: string) => void }) {
   const files = useMemo(() => filesOf(events), [events]);
   const current = files.find(f => f.path === selected) ?? files.find(f => !f.deleted && /report|design/i.test(f.path)) ?? files[0];
   return (
@@ -62,12 +62,12 @@ export function Files({ goal, events, selected, onSelect, onSelectAgent }: { goa
         {!files.length && <div className="empty">Nobody has written to the shared folder yet. Designs, reviews and reports land here.</div>}
       </div>
       <Splitter pane="files" grow="right" min={160} max={700} label="File list" />
-      <div className="file-view">{current ? <Viewer key={current.path} goal={goal} file={current} onSelectAgent={onSelectAgent} /> : <div className="empty">Pick a file.</div>}</div>
+      <div className="file-view">{current ? <Viewer key={current.path} goal={goal} file={current} onSelectAgent={onSelectAgent} onGoalFrom={onGoalFrom} /> : <div className="empty">Pick a file.</div>}</div>
     </div>
   );
 }
 
-export function Viewer({ goal, file, onSelectAgent }: { goal: Goal; file: FileInfo; onSelectAgent: (n: string) => void }) {
+export function Viewer({ goal, file, onSelectAgent, onGoalFrom }: { goal: Goal; file: FileInfo; onSelectAgent: (n: string) => void; onGoalFrom?: (path: string) => void }) {
   const [version, setVersion] = useState<number>();
   const [view, setView] = useState<SharedFileView>();
   const [error, setError] = useState<string>();
@@ -123,6 +123,11 @@ export function Viewer({ goal, file, onSelectAgent }: { goal: Goal; file: FileIn
           {md && (
             <button className={`btn small${raw ? ' on' : ''}`} onClick={() => setRaw(r => !r)}>
               {raw ? 'Rendered' : 'Source'}
+            </button>
+          )}
+          {onGoalFrom && !file.deleted && (
+            <button className="btn small" onClick={() => onGoalFrom(file.path)} title="A new goal with this file copied into its shared folder">
+              New goal from this
             </button>
           )}
         </div>

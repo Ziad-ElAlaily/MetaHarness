@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api } from '../api.ts';
 import { agentColors } from '../agentColors.ts';
 import { ago } from '../format.ts';
@@ -53,7 +53,8 @@ export function gitRows(events: MhEvent[], mapFile = 'ARCHITECTURE.md'): Row[] {
 
 export const shortBranch = (goal: string, b: string) => b.replace(`mh/${goal}/`, '');
 
-export default function Git({ goal, events, sel, onSel, onSelectAgent, onOpenDesign }: { goal: Goal; events: MhEvent[]; sel?: GitSel; onSel: (s: GitSel) => void; onSelectAgent: (n: string) => void; onOpenDesign: (sha: string, area?: string) => void }) {
+/** The goal's history, branches and diffs: the Design tab's Commits lens (`lens` is its switch, shown above the history). */
+export default function Git({ goal, events, sel, onSel, onSelectAgent, onOpenDesign, lens }: { goal: Goal; events: MhEvent[]; sel?: GitSel; onSel: (s: GitSel) => void; onSelectAgent: (n: string) => void; onOpenDesign: (sha: string, area?: string) => void; lens?: ReactNode }) {
   const [view, setView] = useState<GitView>();
   const [diff, setDiff] = useState<DiffView>();
   const [error, setError] = useState<string>();
@@ -92,7 +93,13 @@ export default function Git({ goal, events, sel, onSel, onSelectAgent, onOpenDes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [goal.id, key, current.kind === 'uncommitted' ? events.length : 0]);
 
-  if (view && !view.git) return <div className="empty">{view.note}</div>;
+  if (view && !view.git)
+    return (
+      <>
+        {lens && <div className="toolbar">{lens}</div>}
+        <div className="empty">{view.note}</div>
+      </>
+    );
   const g = view?.git;
   const shown = branch ? rows.filter(r => r.branch === branch) : rows;
   // Which parts of the design each commit touched, from the latest snapshot's areas.
@@ -102,6 +109,7 @@ export default function Git({ goal, events, sel, onSel, onSelectAgent, onOpenDes
   return (
     <div className="git-view">
       <div className="git-side">
+        {lens && <div className="git-lens">{lens}</div>}
         {g && (
           <div className="git-head">
             <div>
@@ -244,8 +252,8 @@ export default function Git({ goal, events, sel, onSel, onSelectAgent, onOpenDes
           <div className="row-wrap">
             <b className="grow">{current.kind === 'range' ? `Changes on ${current.label}` : diff?.title ?? '…'}</b>
             {current.kind === 'commit' && (
-              <button className="btn ghost small" onClick={() => onOpenDesign(current.sha)} title="See what this commit did to the design">
-                Open in Design
+              <button className="btn ghost small" onClick={() => onOpenDesign(current.sha)} title="See what this commit did to the design, on the map">
+                On the map
               </button>
             )}
           </div>

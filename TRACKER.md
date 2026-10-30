@@ -579,6 +579,21 @@ Findings from the run:
   Teammates asking the human while away are told to ask the lead instead (`message.held`). The
   switch is in the goal header and on Home; checked with tests (163) and in headless Chrome
   against a scripted daemon. Not yet run live.
+- [x] **UI reorganised around how it's used** (discussed and agreed on 2026-10-30). The log
+  showed 23 of 48 goals starting by pasting another goal's `shared/…` path, and Home opened
+  mostly for plan limits. Goals now **continue goals**: `goal.start` takes `from` + `files`
+  (and `fromRoom`), copies them into the new goal's `shared/imported/` so deleting the old goal
+  loses nothing, and gives the lead the old outcome; `goal.docs` lists a goal's documents; the
+  goals list carries `from` (older goals linked by the path in their request). **Home**: plan
+  limits, Needs you, approvals mode + away, running goals and rooms, and lines of work (chains
+  by `from`) with Implement / Review / Continue. The goal page shows the outcome once, above
+  the story (with those buttons, Discuss in a room, Follow up); the header has the approvals
+  mode beside away. Five tabs: Story (+ Every event), Graph (Map / Messages / Busy), Design
+  (Areas / Systems / **Commits**, the old Git tab), Files (New goal from this), Costs; rooms
+  have Room, Files, Costs. **Setup** is one rail entry with Team / Behaviour / Machine across
+  the top. Fixed: an old cache-expiry toast replayed when opening a room; the rail scrolled
+  sideways. Checked with tests (164) and in headless Chrome against a copy of the real log.
+  Not yet run live.
 - [ ] The assistant stepping into goals (messaging the lead, pausing): later
 - [ ] Your own runs with the UI (live harnesses); fix what they turn up
 - [ ] Build order 3 (Milestone 3): shared-folder history browser, replay, search
