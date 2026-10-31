@@ -47,6 +47,12 @@ function buildServer(d: Daemon, goal: string, agent: string): McpServer {
       content: [{ type: 'text', text: await d.hub.call(goal, agent, name, args) }],
     }));
   }
+  return server;
+}
+
+/** The tool Claude Code's --permission-prompt-tool calls; every session gets it, the assistant's too. */
+function registerApproval(server: McpServer, d: Daemon, goal: string, agent: string): void {
+  const register = server.registerTool.bind(server) as unknown as Register;
   register(
     APPROVAL_TOOL,
     {
@@ -67,7 +73,6 @@ function buildServer(d: Daemon, goal: string, agent: string): McpServer {
       return { content: [{ type: 'text', text: JSON.stringify(body) }] };
     },
   );
-  return server;
 }
 
 function summarizeInput(input: unknown): string {
@@ -96,6 +101,7 @@ export async function handleMcp(d: Daemon, token: string, req: IncomingMessage, 
     return;
   }
   const server = who.agent === ASSISTANT ? buildAssistantServer(d) : buildServer(d, who.goal, who.agent);
+  registerApproval(server, d, who.goal, who.agent);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   res.on('close', () => {
     void transport.close();

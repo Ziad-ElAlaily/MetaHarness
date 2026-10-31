@@ -20,7 +20,10 @@ async function answer(ctx: FakeCtx, question: string) {
   if (/who did/i.test(question)) {
     const goals = JSON.parse(await call('goals'));
     const lines = await call('events', { goal: goals[0].id, search: 'finished' });
-    ctx.say(`Goal ${goals[0].id}: ${lines.split('\n').length} matching lines.\n${lines}`);
+    // Claude Code's --permission-prompt-tool needs approval on the assistant's server too, or it won't start.
+    const tools = (await c.listTools()).tools.map(t => t.name);
+    const approval = tools.includes('approval') ? await call('approval', { tool_name: 'Write', input: { file_path: 'x' } }) : 'missing';
+    ctx.say(`Goal ${goals[0].id}: ${lines.split('\n').length} matching lines.\n${lines}\napproval: ${approval}`);
   } else if (/cheaper/i.test(question)) {
     const cfg = JSON.parse(await call('config'));
     ctx.say(`Roles I can see: ${cfg.roles.map((r: { name: string }) => r.name).join(', ')}; built in: ${cfg.builtInRoles.join(', ')}.`);
@@ -56,6 +59,7 @@ test('the assistant answers from its read-only tools, and changes the setup only
   const said = stream().find(e => e.type === 'assistant.text')!.data.text as string;
   assert.match(said, new RegExp(`Goal ${goal}`));
   assert.match(said, /implementer-1 .*finished the parser/);
+  assert.match(said, /approval: .*"behavior":"deny".*only reads/, 'the assistant has an approval tool, and read-only mode denies a write');
   assert.deepEqual(stream().filter(e => e.type === 'assistant.tool').map(e => e.data.tool), ['goals', 'events']);
   assert.match(stream().find(e => e.type === 'assistant.asked')!.data.text as string, /Who did the work/);
   assert.ok(stream().every(e => e.data.conv === conv));
