@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -163,4 +163,56 @@ test('making a pick the default writes the built-in assistant out first, with it
   assert.match(r.file, /mh-config-/, 'in the first config folder (personal, when there is one)');
   assert.equal(d.config.roles.get('assistant')!.model, 'haiku');
   await d.close();
+});
+
+test('the assistant can make a role and change a workflow it already has, and write mode applies them at once', async () => {
+  const propose = async (ctx: FakeCtx, text: string) => {
+    const c = new Client({ name: 'assistant', version: '0' });
+    await c.connect(new StreamableHTTPClientTransport(new URL(ctx.spec.mcpUrl)));
+    const [command, args] = JSON.parse(text.split('\n').at(-1)!);
+    const r = (await c.callTool({ name: 'propose', arguments: { summary: command, command, args } })) as any;
+    ctx.say(r.content[0].text);
+    await c.close();
+  };
+  const fake = new FakeAdapter({ assistant: ctx => propose(ctx, ctx.spec.brief) }, {}, { assistant: propose });
+  const d = makeTeam({ roles: { assistant: role('helper: true\n') }, workflows: { review: '---\ngood_at: reviews\n---\n1. Read it.\n' }, adapters: { fake } });
+  const server = await startServer(d, 0, 'secret');
+  after(async () => {
+    await d.close();
+    server.close();
+  });
+  const texts = () => d.store.since(ASSISTANT_STREAM).filter(e => e.type === 'assistant.text').map(e => String(e.data.text));
+  const ask = async (command: string, args: Record<string, unknown>) => {
+    const n = texts().length;
+    d.assistant.ask(JSON.stringify([command, args]));
+    await withTimeout(
+      (async () => {
+        while (texts().length <= n || d.assistant.busy()) await settle();
+      })(),
+      4000,
+      command,
+    );
+    return texts().at(-1)!;
+  };
+  const scope = d.configView().scopes[0].scope;
+  const proposal = () => d.store.since(ASSISTANT_STREAM).filter(e => e.type === 'assistant.proposal').at(-1)!.data.id;
+
+  // Read only: proposals, applied by the human. The workflow keeps what the change leaves out.
+  assert.match(await ask('workflow.save', { scope, name: 'review', body: '1. Read it.\n2. Run the tests.' }), /Proposed/);
+  await d.command({ cmd: 'assistant.apply', id: proposal() });
+  const review = d.configView().workflows.find(w => w.name === 'review')!;
+  assert.match(review.body, /Run the tests/);
+  assert.equal(review.goodAt, 'reviews');
+  assert.match(await ask('role.save', { scope, name: 'tester', harness: 'fake', model: 'm', goodAt: 'testing', instructions: 'Test things.' }), /Proposed/);
+  assert.equal(d.config.roles.has('tester'), false, 'not applied yet');
+  await d.command({ cmd: 'assistant.apply', id: proposal() });
+  assert.equal(d.config.roles.get('tester')?.goodAt, 'testing');
+
+  // Write mode: applied when proposed.
+  await d.command({ cmd: 'assistant.set', write: true });
+  assert.match(await ask('role.save', { scope, name: 'linter', harness: 'fake', model: 'm', goodAt: 'linting', instructions: 'Lint.' }), /Applied .*Saved/);
+  assert.equal(d.config.roles.get('linter')?.goodAt, 'linting');
+  assert.match(await ask('role.save', { scope, name: 'linter', harness: 'fake', model: 'm', goodAt: 'x', instructions: 'x' }), /already a role called linter/);
+  assert.match(await ask('workflow.save', { scope, name: 'review', goodAt: 'careful reviews' }), /Applied/);
+  assert.match(d.configView().workflows.find(w => w.name === 'review')!.body, /Run the tests/);
 });

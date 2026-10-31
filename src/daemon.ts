@@ -625,6 +625,10 @@ export class Daemon {
   /** The project the human asked the assistant from last, and the folder its current conversation started in. */
   private assistantProject?: Project;
   private assistantIn?: string;
+  /** Where the assistant's write-mode changes land when they name no project. */
+  get assistantProjectId(): string | undefined {
+    return this.assistantProject?.id;
+  }
 
   /**
    * Where a new assistant conversation starts: the project the human is in (write mode changes

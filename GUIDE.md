@@ -219,7 +219,8 @@ guidelines), **Behaviour** (rules, settings) and **Machine** (harnesses, tools a
   what was said so far; **Make default** saves the pick to its role, so it starts on it after
   a restart too. It works for every project: a conversation starts in the project you're in,
   and it can look at the others. It reads only, unless you switch it to **Write**: then it may
-  edit files and run any command in the project, for a task you give it. A new conversation
+  edit files and run any command in the project, for a task you give it, and the setup
+  changes it suggests are applied at once. A new conversation
   starts in read only again.
 - **Goal:** the request, status, time, cost and branch in one line at the top, with how
   approvals are decided and **I'm away** while it runs. Once it's done, its **Outcome** (the

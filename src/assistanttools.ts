@@ -8,7 +8,7 @@ import { MCP_SERVER_NAME } from './mcp.ts';
 
 /**
  * The assistant's MetaHarness tools: everything it knows about goals and setup comes through
- * these, and only `propose` leads to a change (when the human applies it).
+ * these, and only `propose` leads to a change (when the human applies it, or at once in write mode).
  */
 
 type TextResult = { content: { type: 'text'; text: string }[] };
@@ -22,7 +22,7 @@ const text = (v: unknown): TextResult => {
 const opt = z.string().optional();
 
 /** Commands a proposal may run once applied: setup and opening projects, never goals or agents. */
-const PROPOSABLE = ['role.update', 'settings.save', 'workflow.save', 'rule.save', 'guide.save', 'mcp.save', 'project.open', 'project.create', 'project.clone'];
+const PROPOSABLE = ['role.save', 'role.update', 'settings.save', 'workflow.save', 'rule.save', 'guide.save', 'mcp.save', 'project.open', 'project.create', 'project.clone'];
 
 export const GUIDE_PATH = join(import.meta.dirname, '..', 'GUIDE.md');
 
@@ -129,7 +129,7 @@ export function buildAssistantServer(d: Daemon): McpServer {
       folders: c.scopes,
       roles: c.roles.map(r => ({ name: r.name, savedIn: r.scope, harness: r.harness, model: r.model, effort: r.effort || 'harness default', fallback: r.fallback, goodAt: r.goodAt, helper: r.helper, approvals: r.approvals || 'as in settings', allow: r.allow })),
       builtInRoles: [c.settings.effective.gatekeeper, c.settings.effective.assistant].filter(n => !c.roles.some(r => r.name === n)),
-      workflows: c.workflows.map(w => ({ name: w.name, savedIn: w.scope, goodAt: w.goodAt, roles: w.roles.length ? w.roles : 'every role' })),
+      workflows: c.workflows.map(w => ({ name: w.name, savedIn: w.scope, goodAt: w.goodAt, roles: w.roles.length ? w.roles : 'every role', body: w.body })),
       rules: c.rules.map(r => ({ name: r.name, savedIn: r.scope, on: r.on, when: r.when, roles: r.roles, paths: r.paths, description: r.description, body: r.body })),
       skills: c.skills.map(k => ({ name: k.name, folder: k.dir, from: k.source, on: k.on, carriedBy: k.carriedBy.length ? k.carriedBy : 'every role', pointedBy: k.pointedBy, harness: k.harness, description: k.description })),
       settings: c.settings.effective,
@@ -148,21 +148,34 @@ export function buildAssistantServer(d: Daemon): McpServer {
 
   tool(
     'propose',
-    `Suggest a setup change; the human sees it in the app and applies it with one click. command is one of: ${PROPOSABLE.join(', ')}. ` +
+    `Suggest a setup change; the human sees it in the app and applies it with one click (in write mode it's applied at once). command is one of: ${PROPOSABLE.join(', ')}. ` +
+      'role.save makes a new role: { scope, name, harness, model, effort?, fallback?: [..], goodAt, instructions, approvals?, allow?: [..], skills?: [..] }. ' +
       'role.update: { name, changes: { model?, effort? (low, medium, high, xhigh, max), harness?, fallback?: [..] ("harness/model@effort" for a backup\'s own effort), goodAt?, approvals?, allow?: [..], skills?: [..], instructions? } }. ' +
       'settings.save: { scope: "personal" | "repo", patch: { approvals?, models?: { "harness/model": { prices?: { input, output, cacheRead?, cacheWrite? }, cacheMinutes? } } } } (prices in dollars per million tokens). ' +
-      'workflow.save: { scope, name, goodAt, body }. ' +
-      'rule.save: { scope, name, when: start|path|new-file|commit|done, description, body, roles?: [..], paths?: [..], sections?, include?, requires?, missing?, changes?: [..], unlessChanged?, edited?, skill? (a skill the note points at; then body may be empty) }; ' +
+      'workflow.save: { scope, name, goodAt, body, roles?: [..] } makes or replaces one; fields left out keep what the workflow has. ' +
+      'rule.save (makes or replaces one; send it whole): { scope, name, when: start|path|new-file|commit|done, description, body, roles?: [..], paths?: [..], sections?, include?, requires?, missing?, changes?: [..], unlessChanged?, edited?, skill? (a skill the note points at; then body may be empty) }; ' +
       'to turn a rule or skill off or on without a file, settings.save with patch: { rules: { "<name>": false|true } } or { skills: { … } }. ' +
       'A "repo" scope is a project\'s own folder: add project (its id or folder) to the args; "personal" applies to every project. ' +
       'project.open: { dir } opens a folder on this machine as a project. project.create: { dir, git? } makes a new folder (with a git repository unless git: false) and opens it. ' +
       'project.clone: { url, dir } clones a repository into a new folder and opens it (ask the human where it should go if they didn\'t say; the folders tool shows what\'s there). ' +
       'Always give a one-line summary of the change and why.',
     { summary: z.string(), command: z.string(), args: z.record(z.string(), z.unknown()).optional() },
-    a => {
+    async a => {
       if (!PROPOSABLE.includes(a.command)) return `I can't propose ${a.command}. Proposable: ${PROPOSABLE.join(', ')}.`;
-      const p = d.assistant.propose(String(a.summary), { cmd: a.command, ...(a.args ?? {}) });
-      return `Proposed (${p.id}). The human sees it with an Apply button; it isn't applied until they click it.`;
+      const args: Record<string, unknown> = { ...(a.args ?? {}) };
+      if ((a.command === 'workflow.save' || a.command === 'rule.save') && !args.previous && typeof args.name === 'string') {
+        // Saving under a name the folder already has replaces that one, instead of failing as a duplicate.
+        args.previous = { name: args.name, scope: args.scope };
+        if (a.command === 'workflow.save') {
+          const cur = d.configView({ project: args.project ?? d.assistantProjectId }).workflows.find(w => w.name === args.name);
+          if (cur) for (const k of ['goodAt', 'roles', 'body'] as const) args[k] ??= cur[k];
+        }
+      }
+      const p = d.assistant.propose(String(a.summary), { cmd: a.command, ...args });
+      if (!d.assistant.choice.write) return `Proposed (${p.id}). The human sees it with an Apply button; it isn't applied until they click it.`;
+      const project = d.assistantProjectId;
+      const r = await d.command({ cmd: 'assistant.apply', id: p.id, ...(project ? { project } : {}) });
+      return `Applied (${p.id}), as write mode is on. ${String(r.result ?? '')}`;
     },
   );
 

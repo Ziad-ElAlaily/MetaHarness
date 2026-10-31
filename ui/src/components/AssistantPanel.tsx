@@ -327,7 +327,7 @@ function Controls({ choice, options, busy, dir, onChoose, onMakeDefault }: { cho
           </button>
         )}
       </div>
-      {choice.write && <div className="warn-text small">Write mode: it can edit files and run commands in {dir}. New conversations start in read only.</div>}
+      {choice.write && <div className="warn-text small">Write mode: it can edit files and run commands in {dir}, and applies setup changes at once. New conversations start in read only.</div>}
     </div>
   );
 }
