@@ -1,7 +1,7 @@
 # Tracker
 
 Where MetaHarness stands against the plan in [DESIGN.md §19](DESIGN.md). Update this file when a
-step lands. Last updated 2026-10-30.
+step lands. Last updated 2026-11-01.
 
 ## Milestone 0: a small team works ✅
 
@@ -262,8 +262,15 @@ Findings from the run:
       and the messages to it are renamed in the log, `agent.renamed`); the replacement takes its
       role, brief, spawner, worktree and waiting messages. A crashed lead goes to the human's
       Inbox. The daemon never respawns by itself: the user wants the lead to decide
-- [ ] An agent that goes quiet mid-turn for a long time (no tool calls, no text): not detected.
-      Dropped unless it shows up in use (2026-10-23): it never has; crashes did
+- [x] **Agents gone quiet mid-turn** (2026-11-01, DESIGN.md §8): it showed up in use. Two Codex
+      workers in goal `024deee4` each viewed a 2.8 MB reference PNG. Every later request then
+      carried ~4 MB, and the provider's stream kept dropping it (broken pipe, idle timeout). They sat
+      "working" for 35+ minutes, and urgent messages started new turns that hung the same way.
+      Now: Codex's retries show up as `agent.warning`. After `stallMinutes` with nothing from its
+      harness and nothing it could be waiting on, its spawner hears once (`agent.silent`), with the
+      last warning. `respawn` works on it, keeping it as `<name>-stalled`, and the app shows the
+      respawn buttons. A `large-images` default rule suggests viewing a smaller copy.
+      Scripted test only; not seen live yet
 - [ ] Test each workflow on its own, once more workflows and roles exist (quality, cost, time,
       interventions). A single-model baseline comparison is dropped for now (2026-10-18)
 

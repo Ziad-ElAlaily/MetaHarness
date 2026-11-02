@@ -30,6 +30,8 @@ export interface FakeCtx {
   context(pct: number, tokens?: number): void;
   /** Dies as a harness process can: the session exits as crashed. The script should return after it. */
   crash(detail?: string): void;
+  /** Reports a problem the harness carries on through, such as a retry. */
+  warn(text: string): void;
 }
 
 /** A role's later turns: each message that starts a new turn, after the first script. */
@@ -176,6 +178,7 @@ class FakeSession implements Session {
         this.ev.usage({ costUsd: Number(this.cost.toFixed(4)), contextPct: pct, ...(tokens ? { contextTokens: tokens } : {}) });
       },
       stopped: () => this.stopped,
+      warn: text => this.ev.warning?.(text),
       crash: detail => {
         this.stopped = true;
         this.running = false;

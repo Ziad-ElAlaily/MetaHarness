@@ -134,3 +134,97 @@ test('an agent that stopped without calling done is not stuck, and stall reports
   assert.equal(stalls(off, g2).length, 0);
   await off.close();
 });
+
+test("a turn gone silent: its spawner hears once, with the harness's last warning, and can respawn it", async () => {
+  const heard: string[] = [];
+  let reply = '';
+  let runs = 0;
+  const fake = new FakeAdapter({
+    architect: async ctx => {
+      await ctx.tool('spawn', { role: 'implementer', brief: 'Build part A.' });
+      heard.push(await ctx.tool('wait', { timeout: 600 }));
+      reply = await ctx.tool('respawn', { name: 'implementer-1', fresh: true });
+      heard.push(await ctx.tool('wait', { timeout: 600 }));
+      await ctx.tool('done', { note: 'Part A is built.' });
+    },
+    implementer: async ctx => {
+      if (++runs > 1) return void (await ctx.tool('done', { note: 'Part A is built.' }));
+      await ctx.tool('status', { text: 'Writing the parser' });
+      // Its model call hangs: the harness retries and says so, then nothing.
+      ctx.warn('Codex is retrying its model call: stream disconnected before completion');
+      while (!ctx.stopped()) await ctx.sleep(10);
+    },
+  });
+  const d = makeTeam({ roles: { architect: role, implementer: role }, adapters: { fake } });
+  const goal = d.startGoal({ request: 'Build part A' });
+  const impl = () => d.agent(goal, 'implementer-1')!;
+  await until('the implementer hangs', () => impl()?.state === 'working' && !!impl().lastWarning && d.agent(goal, 'architect')?.state === 'waiting');
+  await settle();
+  const silents = () => d.store.since(goal).filter(e => e.type === 'agent.silent');
+
+  const early = d.respawnAgent(goal, 'implementer-1', { by: 'human' });
+  assert.ok(!early.ok && /hasn't crashed or hung \(it's working/.test(early.error), 'a working agent is left alone');
+  d.checkStalls(Date.now() + 5 * MIN);
+  assert.equal(silents().length, 0, 'not before stallMinutes');
+
+  // Eleven minutes with nothing from its harness.
+  impl().heardAt = Date.now() - 11 * MIN;
+  d.checkStalls();
+  d.checkStalls();
+  await until('the spawner hears', () => heard.length >= 1);
+  assert.match(heard[0], /implementer-1 \(implementer\) has been in a turn for 11 min with nothing from fake · m: no reply, no tool call, no command running/);
+  assert.match(heard[0], /The last thing fake said, \d+ min ago: "Codex is retrying its model call: stream disconnected before completion"/);
+  assert.match(heard[0], /call respawn with name: implementer-1: that stops this session and resumes it; add fresh: true/);
+  assert.equal(silents().length, 1);
+  assert.equal(silents()[0].data.told, 'architect');
+  assert.equal(silents().length, 1, 'once per silent spell');
+  assert.equal(stalls(d, goal).length, 0, "the spawner waiting on it isn't stuck");
+
+  await withTimeout(d.goals.get(goal)!.leadDone, 5000, 'the lead finishes');
+  assert.match(reply, /Started implementer-1 again on fake · m, in a fresh session, from a handoff\. The stalled one is kept as implementer-1-stalled\./);
+  assert.equal(d.agent(goal, 'implementer-1-stalled')!.state, 'ended');
+  assert.match(heard[1], /Part A is built/);
+  const ended = d.store.since(goal).find(e => e.agent === 'implementer-1-stalled' && e.type === 'agent.ended');
+  assert.match(String(ended?.data.reason), /respawned by architect: it hung \(nothing came from fake for 11 min; its last warning: Codex is retrying/);
+  await d.close();
+});
+
+test('a hung agent respawned without fresh resumes its session once the hung one has stopped', async () => {
+  const firstMessages: string[] = [];
+  let reply = '';
+  const fake = new FakeAdapter(
+    {
+      architect: async ctx => {
+        await ctx.tool('spawn', { role: 'implementer', brief: 'Build part A.' });
+        await ctx.tool('wait', { timeout: 600 });
+        reply = await ctx.tool('respawn', { name: 'implementer-1' });
+        await ctx.tool('wait', { timeout: 600 });
+        await ctx.tool('done', { note: 'Part A is built.' });
+      },
+      implementer: async ctx => {
+        await ctx.tool('status', { text: 'Writing the parser' });
+        while (!ctx.stopped()) await ctx.sleep(10);
+      },
+    },
+    {},
+    {
+      implementer: async (ctx, text) => {
+        firstMessages.push(text);
+        await ctx.tool('done', { note: 'Part A is built.' });
+      },
+    },
+  );
+  const d = makeTeam({ roles: { architect: role, implementer: role }, adapters: { fake } });
+  const goal = d.startGoal({ request: 'Build part A' });
+  const impl = () => d.agent(goal, 'implementer-1')!;
+  await until('the implementer hangs', () => impl()?.state === 'working' && impl().heardAt !== undefined && d.agent(goal, 'architect')?.state === 'waiting');
+  await settle();
+  impl().heardAt = Date.now() - 11 * MIN;
+  d.checkStalls();
+
+  await withTimeout(d.goals.get(goal)!.leadDone, 5000, 'the lead finishes');
+  assert.match(reply, /Started implementer-1 again on fake · m, resuming its session\. The stalled one is kept as implementer-1-stalled\./);
+  assert.ok(fake.started.at(-1)!.resume, 'resumed');
+  assert.match(firstMessages[0], /Your session hung \(nothing came from fake for 11 min\), and architect started it again/);
+  await d.close();
+});

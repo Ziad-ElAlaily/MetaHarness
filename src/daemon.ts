@@ -149,6 +149,12 @@ export interface AgentRec {
   lastPartner?: { name: string; at: number; text: string; sent: boolean };
   /** The progressAt its stall was last reported at, so each stuck spell is reported once. */
   stallReported?: number;
+  /** When its harness last reported anything (a turn starting, a reply, a tool call or result, tokens), for silent-turn reports. */
+  heardAt?: number;
+  /** The heardAt its silence was last reported at, so each silent spell is reported once. */
+  silentReported?: number;
+  /** The harness's last warning (a retry it's making, say), for a silence report. */
+  lastWarning?: { text: string; at: number };
   /** Its context window is nearly full: it continues in a fresh session soon (see checkContext). */
   refresh?: { since: number; pct: number; timer?: NodeJS.Timeout };
   /** Which rules it has had this session (design §18). A fresh session starts over. */
@@ -1084,11 +1090,15 @@ export class Daemon {
     let sessionTokens: Tokens | undefined;
     /** How full its context was at this session's first report. */
     let startPct: number | undefined;
+    const heard = () => {
+      rec.heardAt = Date.now();
+    };
     return {
       turnStarted: () => {
         if (live()) {
           rec.toolsRunning = 0;
           rec.turnText = '';
+          heard();
         }
         if (live() && !FINISHED.includes(rec.state) && rec.state !== 'paused' && rec.state !== 'limited') this.setState(rec, 'working');
       },
@@ -1105,16 +1115,20 @@ export class Daemon {
       },
       text: text => {
         if (!live()) return;
+        heard();
         rec.lastText = text;
         rec.turnText = text;
         rec.lastCallAt = Date.now();
         this.emit({ ...base, type: 'agent.text', data: { text } });
       },
       warning: text => {
-        if (live()) this.emit({ ...base, type: 'agent.warning', data: { text } });
+        if (!live()) return;
+        rec.lastWarning = { text, at: Date.now() };
+        this.emit({ ...base, type: 'agent.warning', data: { text } });
       },
       toolCall: (tool, summary, info) => {
         if (!live()) return;
+        heard();
         rec.toolsRunning++;
         rec.lastCallAt = Date.now();
         if (!WAITING_TOOLS.test(tool)) this.touch(rec);
@@ -1127,12 +1141,14 @@ export class Daemon {
       },
       toolResult: (summary, ok) => {
         if (!live()) return;
+        heard();
         rec.toolsRunning = Math.max(0, rec.toolsRunning - 1);
         rec.lastToolEnd = Date.now();
         this.emit({ ...base, type: 'agent.tool_result', data: { summary, ok } });
       },
       usage: u => {
         if (!live()) return;
+        heard();
         const session = tokensOf(u, sessionTokens);
         // More tokens means another model call, which refreshes the prompt cache.
         if (tokenCount(session) > tokenCount(sessionTokens)) rec.lastCallAt = Date.now();
@@ -1704,10 +1720,11 @@ export class Daemon {
   }
 
   /**
-   * Starts a crashed agent again under its name. The crashed one stays on the team, with its
-   * history, as <name>-crashed; the new one takes its role, brief, spawner, worktree and waiting
-   * messages. It resumes the crashed session, unless `fresh` or `on` (another of the role's routes)
-   * asks for a new one, which starts from a handoff. `by` is the human, the agent's spawner or the lead.
+   * Starts a crashed agent again under its name, or one whose turn hung (see silentMinutes), whose
+   * session it stops first. The old one stays on the team, with its history, as <name>-crashed
+   * (or -stalled); the new one takes its role, brief, spawner, worktree and waiting messages. It
+   * resumes the old session, unless `fresh` or `on` (another of the role's routes) asks for a new
+   * one, which starts from a handoff. `by` is the human, the agent's spawner or the lead.
    */
   respawnAgent(goalId: string, name: string, o: { by: string; fresh?: boolean; on?: string; note?: string }): { ok: true; text: string } | { ok: false; error: string } {
     const g = this.goals.get(goalId);
@@ -1717,7 +1734,12 @@ export class Daemon {
       const crashed = [...g.agents.values()].filter(a => a.state === 'crashed' && !a.quick).map(a => a.name);
       return { ok: false, error: `There's no agent called ${name}. Crashed teammates: ${crashed.join(', ') || 'none'}.` };
     }
-    if (rec.state !== 'crashed') return { ok: false, error: `${name} hasn't crashed (it's ${rec.state}), so there's nothing to respawn.` };
+    const silent = rec.state === 'crashed' ? undefined : this.silentMinutes(rec);
+    if (rec.state !== 'crashed' && silent === undefined) {
+      const why = rec.state === 'working' ? `it's working, and ${rec.harness} reported something in the last ${this.cfg(rec).settings.stallMinutes || 'few'} minutes` : `it's ${rec.state}`;
+      return { ok: false, error: `${name} hasn't crashed or hung (${why}), so there's nothing to respawn.` };
+    }
+    const kind = silent === undefined ? 'crashed' : 'stalled';
     if (rec.quick) return { ok: false, error: `${name} was a quick helper: spawn a new one instead.` };
     const caller = g.agents.get(o.by);
     if (o.by !== 'human' && !caller?.isLead && rec.parent !== o.by) return { ok: false, error: `Only ${rec.parent} (who spawned ${name}) or the lead can respawn it.` };
@@ -1735,19 +1757,23 @@ export class Daemon {
     const same = route.harness === rec.harness && route.model === rec.model;
     const nativeId = rec.session?.nativeId ?? rec.resumeId;
     const resume = !o.fresh && same && this.adapters[route.harness].manifest.resume && nativeId ? nativeId : undefined;
-    const reason = String(this.store.since(goalId).filter(e => e.agent === name && e.type === 'agent.crashed').at(-1)?.data.reason ?? 'it crashed');
+    const reason =
+      silent === undefined
+        ? String(this.store.since(goalId).filter(e => e.agent === name && e.type === 'agent.crashed').at(-1)?.data.reason ?? 'it crashed')
+        : `nothing came from ${rec.harness} for ${silent} min${rec.lastWarning ? `; its last warning: ${rec.lastWarning.text.slice(0, 200)}` : ''}`;
+    const what = silent === undefined ? 'crashed' : 'hung';
     const by = o.by === 'human' ? 'the human' : o.by;
 
-    // The first message is built from the crashed agent's history, before that history is renamed.
+    // The first message is built from the old agent's history, before that history is renamed.
     const entries = rec.inbox.splice(0);
     const news = [o.note ? `From ${by}: ${o.note}` : '', this.forAgent(rec, entries)].filter(Boolean).join('\n\n');
     const first = resume
-      ? [`[MetaHarness] Your session crashed (${reason}), and ${by} started it again. A command or tool call you were in may not have finished. Check where your work stands (files, git status), then carry on.`, news]
+      ? [`[MetaHarness] Your session ${what} (${reason}), and ${by} started it again. A command or tool call you were in may not have finished. Check where your work stands (files, git status), then carry on.`, news]
           .filter(Boolean).join('\n\n')
-      : this.handoff(rec, { harness: rec.harness, model: rec.model }, `it crashed (${reason})`, { fresh: same, news: news || undefined });
+      : this.handoff(rec, { harness: rec.harness, model: rec.model }, `it ${what} (${reason})`, { fresh: same, news: news || undefined });
 
-    let old = `${name}-crashed`;
-    for (let n = 2; g.agents.has(old); n++) old = `${name}-crashed-${n}`;
+    let old = `${name}-${kind}`;
+    for (let n = 2; g.agents.has(old); n++) old = `${name}-${kind}-${n}`;
     this.store.renameAgent(goalId, name, old);
     // A new session gets a folder of its own; a resumed one may keep what its harness left there.
     const dir = join(this.home, 'goals', goalId, 'agents', name);
@@ -1758,16 +1784,25 @@ export class Daemon {
         // It keeps the folder.
       }
     }
-    g.agents.set(old, { ...rec, name: old, isLead: false, worktree: undefined, session: undefined, inbox: [], waiters: [], doneWaiters: [], fileNotes: new Map(), ruleNotes: [], pause: undefined, refresh: undefined, limitTimer: undefined });
+    g.agents.set(old, {
+      ...rec, name: old, isLead: false, worktree: undefined, session: undefined, inbox: [], waiters: [], doneWaiters: [], fileNotes: new Map(), ruleNotes: [], pause: undefined, refresh: undefined, limitTimer: undefined,
+      ...(silent === undefined ? {} : { state: 'ended' as const, toolsRunning: 0 }),
+    });
     for (const i of this.humanInbox) if (i.goal === goalId && i.agent === name) i.agent = old;
     this.emit({ goal: goalId, agent: old, type: 'agent.renamed', data: { from: name, to: old, by: o.by } });
+    // The hung session is stopped below; the old one's history ends here.
+    if (silent !== undefined) this.emit({ goal: goalId, agent: old, type: 'agent.ended', data: { reason: `respawned by ${by}: it hung (${reason})` } });
     for (const i of this.humanInbox.filter(i => i.goal === goalId && i.agent === old && i.kind === 'crash')) this.resolveInbox(i.id, 'dismiss');
 
     // The same record carries on as the new agent, so its credential and its place on the team stay.
     const s = rec.session;
     rec.gen++;
+    const gen = rec.gen;
     rec.session = undefined;
-    void s?.stop().catch(() => {});
+    const stopped = s?.stop().catch(() => {});
+    // A hung session that resumes is let go first: its harness could otherwise unload the session
+    // under the new one. Meanwhile messages wait in its inbox (no resumeId, so pump leaves them).
+    const deferred = silent !== undefined && !!resume && !!stopped;
     clearTimeout(rec.limitTimer);
     this.endPause(rec);
     this.clearRefresh(rec);
@@ -1776,7 +1811,8 @@ export class Daemon {
       cost: undefined, costBefore: undefined, costSource: undefined, tokens: undefined, tokensBefore: undefined, costSplit: undefined, splitBefore: undefined,
       lastCallAt: undefined, cacheMinutes: undefined, cacheReminded: undefined, contextTokens: undefined, contextPct: undefined, pendingBrief: undefined,
       limitedUntil: undefined, interrupting: false, toolsRunning: 0, lastToolEnd: 0, held: undefined, waiters: [], doneWaiters: [], doneNote: undefined,
-      pendingApprovals: 0, settledAt: undefined, progressAt: Date.now(), stallReported: undefined, resumeId: resume,
+      pendingApprovals: 0, settledAt: undefined, progressAt: Date.now(), stallReported: undefined, resumeId: deferred ? undefined : resume,
+      heardAt: undefined, silentReported: undefined, lastWarning: undefined,
     } satisfies Partial<AgentRec>);
     const wt = rec.worktree;
     this.emit({
@@ -1788,13 +1824,19 @@ export class Daemon {
       },
     });
     this.markDelivered(rec, entries, resume ? 'resume' : 'handoff');
-    if (this.accountLimited(rec.harness, rec.model)) {
-      rec.pendingBrief = first;
-      this.hitLimit(rec);
-    } else this.startSession(rec, first);
+    const start = () => {
+      if (rec.gen !== gen) return;
+      rec.resumeId = resume;
+      if (this.accountLimited(rec.harness, rec.model)) {
+        rec.pendingBrief = first;
+        this.hitLimit(rec);
+      } else this.startSession(rec, first);
+    };
+    if (deferred) void stopped!.then(start);
+    else start();
     const how = resume ? 'resuming its session' : same ? 'in a fresh session, from a handoff' : 'from a handoff';
     const to = rec.parent === o.by ? 'you' : rec.parent === 'human' ? 'the human' : rec.parent;
-    return { ok: true, text: `Started ${name} again on ${rec.harness} · ${rec.model}, ${how}. The crashed one is kept as ${old}. ${name} reports to ${to} when it calls done, as before.` };
+    return { ok: true, text: `Started ${name} again on ${rec.harness} · ${rec.model}, ${how}. The ${kind} one is kept as ${old}. ${name} reports to ${to} when it calls done, as before.` };
   }
 
   /** For the human: where the team's work is, and which branches haven't been merged into it. */
@@ -2023,6 +2065,10 @@ export class Daemon {
       const mins = g.project.config.settings.stallMinutes;
       if (g.status === 'ended' || !mins) continue;
       const ms = mins * 60_000;
+      for (const a of g.agents.values()) {
+        const silent = this.silentMinutes(a, now);
+        if (silent !== undefined && a.silentReported !== (a.heardAt ?? a.progressAt)) this.reportSilent(g, a, silent, now);
+      }
       const going = [...g.agents.values()].filter(a => !a.quick && !FINISHED.includes(a.state) && (a.doneNote === undefined || a.session?.busy()));
       // Idle with no teammates of its own still going: it stopped, and its spawner was told.
       const live = going.filter(a => a.state !== 'idle' || going.some(c => c.parent === a.name));
@@ -2087,6 +2133,48 @@ export class Daemon {
           `The team has been stuck for ${Math.round((now - Math.min(...[...stuck].map(a => a.progressAt))) / 60_000)} minutes: everyone is waiting, and ${lead!.name} (the lead) was told ${Math.round((now - g.stall.at) / 60_000)} minutes ago but nothing has moved.\n${lines.join('\n')}\n\nYour reply goes to ${lead!.name}.`,
         );
       }
+    }
+  }
+
+  /**
+   * How long an agent has been in a turn with nothing from its harness (no reply, tool call or
+   * tokens) and no command or approval it could be waiting on, once that's stallMinutes or more.
+   * Its model call has likely hung: a connection the harness keeps retrying, a request too big to
+   * send. Messages can't reach it, as they wait for its next step.
+   */
+  silentMinutes(a: AgentRec, now = Date.now()): number | undefined {
+    const mins = this.cfg(a).settings.stallMinutes;
+    if (!mins || a.quick || a.state !== 'working' || !a.session?.busy() || a.toolsRunning || a.pendingApprovals || a.held) return undefined;
+    const quiet = now - (a.heardAt ?? a.progressAt);
+    return quiet >= mins * 60_000 ? Math.round(quiet / 60_000) : undefined;
+  }
+
+  /**
+   * A silent agent (see silentMinutes): its spawner hears once per silent spell, with what it can
+   * do, since only it or the lead can respawn it. The lead hears if the spawner has finished, and
+   * the human if the human spawned it or nobody else is left.
+   */
+  private reportSilent(g: GoalRec, a: AgentRec, minutes: number, now: number): void {
+    a.silentReported = a.heardAt ?? a.progressAt;
+    const w = a.lastWarning;
+    const warned = w ? ` The last thing ${a.harness} said, ${Math.max(1, Math.round((now - w.at) / 60_000))} min ago: "${w.text.replace(/\s+/g, ' ').slice(0, 300)}".` : '';
+    const head =
+      `${a.name} (${a.role.name}) has been in a turn for ${minutes} min with nothing from ${a.harness} · ${a.model}: no reply, no tool call, no command running. ` +
+      `Its model call may have hung, and messages can't reach it until that call returns.${warned}`;
+    const fresh = 'start it over from a handoff, the way out when its conversation is what fails (its harness kept retrying, say after it read a large image)';
+    const live = (n: string) => {
+      const r = g.agents.get(n);
+      return r && r !== a && !FINISHED.includes(r.state) ? r : undefined;
+    };
+    const told = a.parent === 'human' ? undefined : (live(a.parent) ?? live(g.lead));
+    this.emit({ goal: g.id, agent: a.name, type: 'agent.silent', data: { minutes, warning: w?.text ?? null, told: told?.name ?? 'human' } });
+    if (told) {
+      this.notice(
+        told,
+        `${head}\nIf it's only thinking hard, leave it. Otherwise call respawn with name: ${a.name}: that stops this session and resumes it; add fresh: true to ${fresh}. Or give its work to someone else.`,
+      );
+    } else {
+      this.toHuman(g, a.name, 'stalled', `${head}\n\nRespawn it from its page in the app, or with mh respawn ${a.name} (--fresh to ${fresh}).`);
     }
   }
 
@@ -4327,6 +4415,7 @@ export class Daemon {
         awaitingApproval: a.pendingApprovals,
         nativeSession: a.session?.nativeId ?? a.resumeId ?? null,
         limitedUntil: a.limitedUntil ?? null,
+        silentMinutes: this.silentMinutes(a) ?? null,
         doneNote: a.doneNote ?? null,
         waitingOn: this.waitingOn(g, a),
         ...this.spendView(a, g.project.config),
@@ -4415,7 +4504,7 @@ export class Daemon {
         state: a.doneNote !== undefined && INTERRUPTED.includes(a.state) ? 'done' : a.state,
         status: a.status, brief: a.brief, quick: a.quick, branch: a.worktree?.branch ?? null, worktree: a.worktree?.path ?? null,
         cwd: a.cwd, cost: this.priced(a, c).cost ?? null, contextPct: a.contextPct ?? null, unread: a.undelivered.length, awaitingApproval: 0, waitingOn: null,
-        nativeSession: a.nativeSession ?? null, limitedUntil: null, doneNote: a.doneNote ?? null,
+        nativeSession: a.nativeSession ?? null, limitedUntil: null, silentMinutes: null, doneNote: a.doneNote ?? null,
         ...this.spendView(a, c),
       })),
       gatekeeperCost: r.gatekeeperCost || null,

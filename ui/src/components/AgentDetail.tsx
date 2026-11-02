@@ -78,6 +78,7 @@ function streamOf(events: MhEvent[], name: string): Item[] {
       case 'agent.context_handoff':
       case 'agent.limited':
       case 'agent.crashed':
+      case 'agent.silent':
       case 'agent.ended':
       case 'agent.idle':
       case 'agent.done_held':
@@ -89,7 +90,7 @@ function streamOf(events: MhEvent[], name: string): Item[] {
       case 'shared.clash':
       case 'rule.fired':
       case 'skill.read':
-        out.push({ kind: 'note', seq: e.seq, ts: e.ts, text: noteText(e), warn: ['agent.crashed', 'git.conflict', 'shared.clash', 'agent.limited', 'agent.moved'].includes(e.type) });
+        out.push({ kind: 'note', seq: e.seq, ts: e.ts, text: noteText(e), warn: ['agent.crashed', 'agent.silent', 'git.conflict', 'shared.clash', 'agent.limited', 'agent.moved'].includes(e.type) });
         break;
     }
   }
@@ -108,10 +109,11 @@ function noteText(e: MhEvent): string {
     case 'agent.context_full': return `context ${d.pct}% full${d.notesAsked ? ': asked to write notes, then continue in a fresh session' : ': its next message starts a fresh session'}`;
     case 'agent.context_handoff': return `continues in a fresh session from a handoff (context was ${d.pct}% full)`;
     case 'agent.crashed': return `crashed: ${d.reason}`;
+    case 'agent.silent': return `nothing from its harness for ${d.minutes} min mid-turn${d.warning ? ` (last warning: ${d.warning})` : ''}; told ${d.told === 'human' ? 'you' : d.told}`;
     case 'agent.ended': return `ended: ${d.reason}`;
     case 'agent.idle': return 'stopped without calling done';
     case 'agent.done_held': return `called done while ${(d.working as string[]).join(', ')} still work: told to deal with them first`;
-    case 'agent.renamed': return `${d.by === 'human' ? 'you' : d.by} respawned ${d.from}: this one, the crashed one, is kept as ${d.to}`;
+    case 'agent.renamed': return `${d.by === 'human' ? 'you' : d.by} respawned ${d.from}: this one, the ${/-stalled(-\d+)?$/.test(d.to) ? 'hung' : 'crashed'} one, is kept as ${d.to}`;
     case 'git.commit': return `committed ${String(d.sha).slice(0, 7)} on ${d.branch}: ${d.summary}`;
     case 'git.merge': return `merged ${d.from} into ${d.into}`;
     case 'git.conflict': return `${d.op} conflict on ${d.branch}: ${(d.files as string[]).join(', ')}`;
@@ -263,9 +265,10 @@ export function AgentDetail({ goal, agent, events, manifest, onCommand, onSpawnU
             </button>
           </div>
         )}
-        {goalLive && agent.state === 'crashed' && !agent.quick && (
+        {goalLive && (agent.state === 'crashed' || agent.silentMinutes !== null) && !agent.quick && (
           <div className="row actions">
-            <button className="btn small" onClick={() => onCommand({ cmd: 'agent.respawn', goal: goal.id, agent: agent.name })} title={`Resumes its session under the name ${agent.name}; the crashed one is kept as ${agent.name}-crashed`}>
+            {agent.state !== 'crashed' && <span className="muted">Nothing from its harness for {agent.silentMinutes} min: its turn may have hung.</span>}
+            <button className="btn small" onClick={() => onCommand({ cmd: 'agent.respawn', goal: goal.id, agent: agent.name })} title={`Resumes its session under the name ${agent.name}; the old one is kept as ${agent.name}-${agent.state === 'crashed' ? 'crashed' : 'stalled'}`}>
               ↻ Respawn
             </button>
             <button className="btn small" onClick={() => onCommand({ cmd: 'agent.respawn', goal: goal.id, agent: agent.name, fresh: true })} title="A new session under its name, from a handoff of where it got to">

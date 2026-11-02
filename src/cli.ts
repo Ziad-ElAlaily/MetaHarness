@@ -37,9 +37,10 @@ const HELP = `mh: run a team of AI agents from different providers on one goal
   mh spawn <role> <brief> [--parent <agent>] [--name <n>] [--worktree] [--goal <id>]
                                      Start an agent yourself; its result comes to you (or to --parent)
   mh respawn <agent> [<note>] [--fresh] [--on <harness/model>] [--goal <id>]
-                                     Start a crashed agent again under its name: its session resumes,
-                                     or with --fresh (or --on another of its role's routes) starts over
-                                     from a handoff. The crashed one is kept as <agent>-crashed
+                                     Start a crashed or hung agent again under its name: its session
+                                     resumes, or with --fresh (or --on another of its role's routes)
+                                     starts over from a handoff. The old one is kept as <agent>-crashed
+                                     (or -stalled)
   mh open <agent> [--goal <id>]      The command that opens an agent's session in its own harness
   mh clean [<goal>] [--force]        Worktrees and merged branches go when a goal's lead finishes; this
                                      retries for finished goals. What was kept (uncommitted or

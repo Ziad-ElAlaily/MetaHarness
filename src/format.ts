@@ -50,7 +50,9 @@ export function eventLine(e: MhEvent): string {
     case 'agent.crashed':
       return `${t}  ${who}${e.type.slice(6)}: ${oneLine(d.reason)}`;
     case 'agent.renamed':
-      return `${t}  ${who}is the crashed ${d.from}, kept under this name: ${d.by === 'human' ? 'you' : d.by} respawned ${d.from}`;
+      return `${t}  ${who}is the ${/-stalled(-\d+)?$/.test(d.to) ? 'hung' : 'crashed'} ${d.from}, kept under this name: ${d.by === 'human' ? 'you' : d.by} respawned ${d.from}`;
+    case 'agent.silent':
+      return `${t}  ${who}⚠ nothing from its harness for ${d.minutes} min mid-turn${d.warning ? ` (last warning: ${oneLine(d.warning)})` : ''}; told ${d.told === 'human' ? 'you' : d.told}`;
     case 'git.commit':
       return `${t}  ${who}committed on ${d.branch}: ${oneLine(d.summary)}`;
     case 'git.merge':

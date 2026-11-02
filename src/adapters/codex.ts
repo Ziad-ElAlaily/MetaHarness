@@ -460,6 +460,14 @@ class CodexSession implements Session {
         else if (it.type === 'mcpToolCall' && it.server !== MCP_SERVER_NAME) this.ev.toolCall(`${it.server}.${it.tool}`, JSON.stringify(it.arguments ?? {}).slice(0, 160));
         break;
       }
+      // Codex retries a dropped model call by itself, and until it gives up the turn just goes
+      // quiet; a failure it won't retry ends the turn (turn/completed, failed).
+      case 'error':
+        if (p.willRetry) this.ev.warning?.(`Codex is retrying its model call: ${p.error?.message ?? 'unknown error'}`);
+        break;
+      case 'warning':
+        if (p.threadId === this.nativeId && p.message) this.ev.warning?.(`Codex: ${p.message}`);
+        break;
       case 'account/rateLimits/updated': {
         const info = codexRateLimit(p.rateLimits);
         if (info) this.ev.rateLimit(info);

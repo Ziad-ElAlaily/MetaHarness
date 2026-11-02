@@ -24,6 +24,8 @@ export interface Agent {
   awaitingApproval: number;
   nativeSession: string | null;
   limitedUntil: number | null;
+  /** Minutes it's been mid-turn with nothing from its harness, once that's a stall (its turn may have hung). */
+  silentMinutes: number | null;
   doneNote: string | null;
   /** Who it's held up by while it waits: the human (an approval, a question, a decision), teammates it started, or whoever it last dealt with. */
   waitingOn: { who: string[]; why: 'approval' | 'question' | 'decision' | 'helpers' | 'partner' } | null;

@@ -21,10 +21,10 @@ export const TOOL_DOCS: Record<(typeof TOOL_NAMES)[number], { description: strin
     },
   },
   respawn: {
-    description: "Start a crashed teammate again under its name. By default its session resumes where it stopped. The crashed one stays on the team as <name>-crashed, with its history.",
+    description: "Start a crashed teammate again under its name, or one whose turn hung (MetaHarness tells you when one has gone silent). By default its session resumes where it stopped. The old one stays on the team as <name>-crashed (or -stalled), with its history.",
     params: {
-      name: 'The crashed teammate',
-      fresh: 'true to start it over in a new session, from a handoff of where it got to (e.g. when resuming crashes again)',
+      name: 'The crashed or hung teammate',
+      fresh: 'true to start it over in a new session, from a handoff of where it got to (e.g. when resuming crashes or hangs again)',
       on: "Optional: another harness/model from its role to run it on, e.g. after its harness crashed twice. Implies fresh",
       note: 'Optional: what to tell it, e.g. messages it missed or what changed',
     },
@@ -165,7 +165,7 @@ export class Hub {
 
       case 'respawn': {
         const name = str(pick(a, 'name', 'agent', 'who', 'teammate', 'to'));
-        if (!name) return 'respawn needs the name of a crashed teammate.';
+        if (!name) return 'respawn needs the name of a crashed or hung teammate.';
         const fresh = truthy(pick(a, 'fresh', 'new', 'restart'));
         const r = d.respawnAgent(rec.goal, name, { by: rec.name, fresh, on: str(pick(a, 'on', 'harness', 'model', 'route')), note: str(pick(a, 'note', 'text', 'message', 'brief')) });
         return r.ok ? r.text : r.error;

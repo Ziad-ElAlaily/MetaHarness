@@ -130,7 +130,7 @@ test('only a crashed agent, by its spawner, the lead or the human', async () => 
   const goal = d.startGoal({ request: 'Build A and B' });
   await until('implementer-1 crashed', () => d.agent(goal, 'implementer-1')?.state === 'crashed');
   await until('the lead tried', () => said.length > 0);
-  assert.match(said[0], /other hasn't crashed \(it's \w+\), so there's nothing to respawn/);
+  assert.match(said[0], /other hasn't crashed or hung \(it's \w+\), so there's nothing to respawn/);
 
   assert.deepEqual(d.respawnAgent(goal, 'implementer-1', { by: 'other' }), { ok: false, error: 'Only architect (who spawned implementer-1) or the lead can respawn it.' });
   assert.match((d.respawnAgent(goal, 'nobody', { by: 'human' }) as { error: string }).error, /There's no agent called nobody\. Crashed teammates: implementer-1/);
