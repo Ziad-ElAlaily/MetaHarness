@@ -636,6 +636,12 @@ Findings from the run:
   scripted agents only: not yet run on a real harness, so whether agents actually use `dismiss`
   unprompted is unknown.
 
+- [x] **Godot demos open from a room's board** (2026-11-04, DESIGN.md §21). A demo card whose file
+  is a `project.godot` gets **▶ Run in Godot**: a window on the daemon's machine, imported first
+  when files changed, with Restart, Stop and script errors on the card. The prototyper makes these
+  in Godot projects, with sliders inside the game. Web export was considered and left out. Checked
+  with tests, with the real Godot 4.7.1 opening and closing a window through a scripted daemon, and
+  the button in headless Chrome (against a stand-in Godot). Not yet tried with a real prototyper.
 - [x] **Files in a message** (DESIGN.md §14, GUIDE.md §6). Attach by picker, drop or paste in an
   agent's conversation, Message the team, a room's chat, the assistant and Inbox answers. The file
   goes in the shared folder on sending, and the message names it, so nothing changes per harness. A
@@ -675,7 +681,7 @@ Findings from the run:
 ## Resuming work
 
 ```sh
-npm install && npm test        # 222 tests, about half a minute, no model calls
+npm install && npm test        # 225 tests, about half a minute, no model calls
 node src/cli.ts doctor         # what's installed and signed in here
 node src/cli.ts daemon --fake  # try it without spending anything
 ```

@@ -15,6 +15,9 @@ export const HISTORY = '.history';
 /** Editor and system droppings that aren't anyone's document. */
 const NOISE = /(^\.#|~$|\.sw[a-p]$|^\.DS_Store$|^#.*#$)/;
 
+/** The cache Godot keeps inside a project: rebuilt when it runs, and never anyone's document. */
+export const GODOT_CACHE = '.godot';
+
 /** Larger files are still reported, but not copied into the history. */
 const MAX_HISTORY_BYTES = 5 * 1024 * 1024;
 
@@ -184,7 +187,7 @@ export class SharedFolder {
         if (NOISE.test(e.name)) continue;
         const full = join(dir, e.name);
         if (e.isDirectory()) {
-          if (!(dir === this.dir && e.name === HISTORY)) stack.push(full);
+          if (!(dir === this.dir && e.name === HISTORY) && e.name !== GODOT_CACHE) stack.push(full);
         } else if (e.isFile()) {
           try {
             const st = statSync(full);

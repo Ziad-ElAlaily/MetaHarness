@@ -211,7 +211,7 @@ function Shell() {
       try {
         // Setup, goals and rooms are the project's: every command says which (the daemon ignores it where it doesn't matter).
         const r = await api.command(projectId && !('project' in body) ? { ...body, project: projectId } : body);
-        if (typeof r.result === 'string' && !['agent.message', 'inbox.resolve', 'room.post', 'room.canvas', 'room.lens', 'room.lensOff', 'room.stop', 'room.ask', 'room.mix'].includes(String(body.cmd))) say(r.result);
+        if (typeof r.result === 'string' && !['agent.message', 'inbox.resolve', 'room.post', 'room.canvas', 'room.lens', 'room.lensOff', 'room.stop', 'room.ask', 'room.mix', 'room.godot'].includes(String(body.cmd))) say(r.result);
         if (body.cmd === 'agent.message') say('Sent.');
         void refresh();
         void loadGoals();

@@ -577,6 +577,23 @@ export function seedCanvas(c: Canvas, from: { cards: Card[]; links: CardLink[] }
 
 /* ---------------- demos ---------------- */
 
+/** A demo that's a Godot project rather than a page: its card's file is the project.godot. */
+export function isGodotDemo(file: string): boolean {
+  return /(^|\/)project\.godot$/.test(file);
+}
+
+/** What's worth showing from a Godot run's output: errors, in the order they came. */
+export function godotErrors(output: string): string[] {
+  const lines = output.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').split(/\r?\n/);
+  const out: string[] = [];
+  lines.forEach((line, i) => {
+    if (!/^\s*(SCRIPT ERROR|ERROR|USER ERROR|USER SCRIPT ERROR):/.test(line)) return;
+    const at = /^\s*at:/.test(lines[i + 1] ?? '') ? ` (${lines[i + 1].trim()})` : '';
+    out.push(line.trim() + at);
+  });
+  return out;
+}
+
 /** A demo page's knobs: the JSON in its <script type="application/json" id="knobs"> tag. */
 export function demoKnobs(html: string): Knob[] {
   const m = /<script[^>]*\bid=["']knobs["'][^>]*>([\s\S]*?)<\/script>/i.exec(html);
@@ -734,6 +751,9 @@ const MAKER_HOW: Record<Output, (paths: RoomPaths) => string[]> = {
     '  The room draws a slider for each and sets `window.knobs` before your scripts run (`knobs.gravity`); it changes live as the human moves them (a `knobs` event fires). Read the values every frame; never draw sliders of your own.',
     "- When the project has the real thing (the engine's movement code, a shader, a formula), port it: the same formulas, units, timestep and order of updates, knobs named after the real parameters and starting at their real values. Name the files you ported from in the card's refs, so the values the human keeps carry back exactly.",
     '- Put it on the board as a demo card with "file", what to try in its text. Open it in a headless browser first if you can, to be sure it runs.',
+    `- In a Godot project (there's a project.godot in the repository), or when the human asks for one, make the demo in Godot instead of a page, unless they ask for a page: a small project of its own in ${p.demos}/<name>/ with project.godot, a main scene set as run/main_scene and GDScript, matching \`godot --version\`, with copies of the real scripts it needs. Its card's "file" is that project.godot; the room gives the human a button that opens it in a window.`,
+    '  The room draws no sliders for it: put the values that matter on sliders inside the game, labelled with the real parameter names and showing their values, so the human can read back what they keep.',
+    '  Check it before the card goes up: `godot --headless --path <folder> --import`, then `godot --headless --path <folder> --quit-after 60`, and fix any errors they print.',
   ],
   text: () => [
     '- Write it short and vivid: the gist first, then the details that make it concrete. A write-up is a text card; several distinct directions are idea cards, one each.',

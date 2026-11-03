@@ -1,7 +1,7 @@
-import { appendFileSync, copyFileSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { appendFileSync, copyFileSync, cpSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync } from 'node:fs';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { basename, dirname, extname, isAbsolute, join, normalize, relative, sep } from 'node:path';
-import { homedir, tmpdir } from 'node:os';
+import { homedir, hostname, tmpdir } from 'node:os';
 import type { Readable } from 'node:stream';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { EventStore } from './store.ts';
@@ -20,7 +20,7 @@ import type { ApprovalMode } from './settings.ts';
 import { MCP_SERVER_NAME } from './mcp.ts';
 import { pathsOutside, readOnlyCommand } from './readonly.ts';
 import { goalOver, INTERRUPTED, replayGoal, type AgentReplay, type GoalReplay } from './recover.ts';
-import { HISTORY, saveUpload, SharedFolder } from './shared.ts';
+import { GODOT_CACHE, HISTORY, saveUpload, SharedFolder } from './shared.ts';
 import { cleanGoal, describeClean, type CleanResult } from './clean.ts';
 import { authorsDir, deniedCommandPrefixes, guardEnv, installGuard, readAuthors, refusedGitCommand, removeAuthors } from './guard.ts';
 import { MAP_FILE, compareDesigns, designReport, type DesignReport, type SnapshotInfo } from './design.ts';
@@ -34,7 +34,7 @@ import { browse, folderSetup, forget, loadRegistry, nesting, Project, projectId,
 import { matchesPaths, onAway, onCommit, onDone, onToolCall, rulesPrompt, RuleState, toolPaths, type Rule, type RuleAgent, type RuleNote, type ToolInfo } from './rules.ts';
 import { claimedSkills, skillsFor, skillsPrompt, withSkills, type Skill } from './skills.ts';
 import {
-  applyCanvas, branchCards, canvasMarkdown, castText, DEFAULT_MAKERS, demoPage, leadMethodology, lensLines, lensMethodology, lensName, makesOf, mixAsk, modelRole, parseCanvasOps, RESPONSIBILITIES,
+  applyCanvas, branchCards, canvasMarkdown, castText, DEFAULT_MAKERS, demoPage, godotErrors, isGodotDemo, leadMethodology, lensLines, lensMethodology, lensName, makesOf, mixAsk, modelRole, parseCanvasOps, RESPONSIBILITIES,
   responsibilityOf, seedCanvas, sharedPath,
   type Canvas, type CanvasOp, type CanvasResult, type Card, type CardKind, type CardLink, type Ingredient, type Lens, type MakerCan, type Output, type RoomPaths, type RoomState,
 } from './rooms.ts';
@@ -397,6 +397,23 @@ const GIT_COMMITS = /\bgit\b[^|;&\n]*?\s(?:commit|merge|cherry-pick|revert|pull|
 const GIT_ACTOR_MS = 120_000;
 
 /** What GET /media serves from a room's folder: images, and demo pages. */
+/** A Godot demo running because the human pressed its button. */
+interface GodotRun {
+  goal: string;
+  /** Its project.godot, relative to the room's shared folder. */
+  file: string;
+  /** Importing, then the game; cleared when it's over. */
+  proc?: ChildProcess;
+  stopped?: boolean;
+  errors: string[];
+}
+
+/** How many of a run's errors are kept: a broken game can print one every frame. */
+const GODOT_MAX_ERRORS = 20;
+
+/** Set when Godot has imported a project, to tell whether anything changed since. */
+const GODOT_IMPORTED = 'mh-imported';
+
 /** Files the human attached to messages, in a shared folder. */
 const UPLOADS = /^(room\/)?uploads\//;
 
@@ -415,6 +432,19 @@ const MEDIA_TYPES: Record<string, string> = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
   '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8',
 };
+
+/** True unless Godot imported this project after its files last changed. */
+function godotNeedsImport(project: string, marker: string): boolean {
+  if (!existsSync(marker)) return true;
+  const since = statSync(marker).mtimeMs;
+  const changed = (dir: string): boolean =>
+    readdirSync(dir, { withFileTypes: true }).some(e => {
+      if (e.name === GODOT_CACHE) return false;
+      const full = join(dir, e.name);
+      return e.isDirectory() ? changed(full) : e.isFile() && statSync(full).mtimeMs > since;
+    });
+  return changed(project);
+}
 
 /** The versions of a shared file kept in its history, oldest first. */
 function keptVersions(dir: string, rel: string): { version: number; by: string; file: string }[] {
@@ -528,6 +558,8 @@ export class Daemon {
   }
 
   private settingsOverride?: DaemonOptions['settings'];
+  /** Godot demos the human has running, by room and file. */
+  private godotRuns = new Map<string, GodotRun>();
   /** Set by close(): side work still finishing does nothing more. */
   private closing = false;
 
@@ -3722,6 +3754,11 @@ export class Daemon {
         for (const c of room.canvas.cards) {
           const src = c.file && join(seed.dir, c.file);
           if (!src || !existsSync(src)) continue;
+          // A Godot demo is its whole folder.
+          if (isGodotDemo(c.file!)) {
+            cpSync(dirname(src), dirname(join(sharedDir, c.file!)), { recursive: true, filter: f => basename(f) !== GODOT_CACHE });
+            continue;
+          }
           mkdirSync(join(sharedDir, c.file!, '..'), { recursive: true });
           copyFileSync(src, join(sharedDir, c.file!));
         }
@@ -3825,7 +3862,7 @@ export class Daemon {
       if (!existsSync(src)) continue;
       const copy = (s: string, r: string) => {
         if (statSync(s).isDirectory()) {
-          for (const e of readdirSync(s)) if (e !== HISTORY) copy(join(s, e), `${r}/${e}`);
+          for (const e of readdirSync(s)) if (e !== HISTORY && e !== GODOT_CACHE) copy(join(s, e), `${r}/${e}`);
           return;
         }
         mkdirSync(dirname(join(to, 'imported', r)), { recursive: true });
@@ -4269,6 +4306,90 @@ export class Daemon {
   }
 
   /**
+   * Opens a room's Godot demo in a window, on the machine the daemon runs on: imported first when
+   * anything in it changed, since a project Godot hasn't imported doesn't run properly. A second
+   * press restarts it. How it goes shows as room.godot events.
+   */
+  roomGodot(goalId: string, path: string): string {
+    if (!/^[0-9a-f-]+$/i.test(goalId)) throw new Error(`There's no room ${goalId}.`);
+    const dir = this.goals.get(goalId)?.sharedDir ?? join(this.home, 'goals', goalId, 'shared');
+    const file = sharedPath(dir, path);
+    if (!file || !isGodotDemo(file) || file.split('/')[0] === HISTORY) throw new Error(`${path} isn't a Godot demo in the room's folder.`);
+    const project = dirname(join(dir, file));
+    if (!existsSync(join(project, 'project.godot'))) throw new Error(`There's no ${file} in the room's folder.`);
+    this.roomGodotStop(goalId, file);
+    const run: GodotRun = { goal: goalId, file, errors: [] };
+    this.godotRuns.set(`${goalId}:${file}`, run);
+    const host = hostname();
+    this.godotPlay(run, project, host).catch(e => {
+      if (run.stopped) return;
+      this.godotRuns.delete(`${goalId}:${file}`);
+      run.stopped = true;
+      this.emit({ goal: goalId, type: 'room.godot', data: { file, state: 'stopped', host, errors: run.errors, problem: String((e as Error).message) } });
+    });
+    return host;
+  }
+
+  /** Closes a room's running Godot demo. Saying so again is harmless: it clears a run a crash left marked as running. */
+  roomGodotStop(goalId: string, file: string): void {
+    const run = this.godotRuns.get(`${goalId}:${file}`);
+    if (!run) return;
+    run.stopped = true;
+    run.proc?.kill();
+    this.godotRuns.delete(`${goalId}:${file}`);
+    this.emit({ goal: goalId, type: 'room.godot', data: { file, state: 'stopped', errors: run.errors } });
+  }
+
+  private async godotPlay(run: GodotRun, project: string, host: string): Promise<void> {
+    const say = (state: string, more: Record<string, unknown> = {}) => {
+      if (!run.stopped) this.emit({ goal: run.goal, type: 'room.godot', data: { file: run.file, state, host, errors: run.errors, ...more } });
+    };
+    const over = (more: Record<string, unknown> = {}) => {
+      if (run.stopped) return;
+      say('stopped', more);
+      run.stopped = true;
+      this.godotRuns.delete(`${run.goal}:${run.file}`);
+    };
+    const bin = process.env.MH_GODOT || 'godot';
+    const missing = `Godot isn't installed where the daemon can run it (it tried "${bin}" on ${host}). Set MH_GODOT to the program's path and restart the daemon.`;
+    const exec = (args: string[], state: string) =>
+      new Promise<{ code: number | null; tail: string; missing?: boolean }>(resolve => {
+        let tail = '';
+        let partial = '';
+        const p = spawn(bin, args, { cwd: project, stdio: ['ignore', 'pipe', 'pipe'] });
+        run.proc = p;
+        const hear = (chunk: Buffer) => {
+          tail = (tail + chunk.toString()).slice(-2000);
+          const lines = partial + chunk.toString();
+          const cut = lines.lastIndexOf('\n') + 1;
+          partial = lines.slice(cut);
+          // A broken game can say the same thing every frame: each once, and only so many.
+          const news = [...new Set(godotErrors(lines.slice(0, cut)))].filter(e => !run.errors.includes(e)).slice(0, GODOT_MAX_ERRORS - run.errors.length);
+          if (news.length) {
+            run.errors.push(...news);
+            say(state);
+          }
+        };
+        p.stdout?.on('data', hear);
+        p.stderr?.on('data', hear);
+        p.on('error', e => resolve({ code: null, tail: e.message, missing: (e as NodeJS.ErrnoException).code === 'ENOENT' }));
+        p.on('close', code => resolve({ code, tail: tail.trim().split('\n').slice(-5).join('\n') }));
+      });
+    const marker = join(project, GODOT_CACHE, GODOT_IMPORTED);
+    if (godotNeedsImport(project, marker)) {
+      say('importing');
+      const r = await exec(['--headless', '--path', project, '--import'], 'importing');
+      if (r.missing) return over({ problem: missing });
+      if (run.stopped) return;
+      if (existsSync(join(project, GODOT_CACHE))) writeFileSync(marker, '');
+    }
+    say('running');
+    const r = await exec(['--path', project], 'running');
+    if (r.missing) return over({ problem: missing });
+    over(r.code === 0 ? {} : { problem: `Godot exited with ${r.code ?? 'a crash'}${r.tail ? `:\n${r.tail}` : ''}` });
+  }
+
+  /**
    * Keeps a file the human is attaching to a message, in the shared folder of the goal it's for
    * (or the assistant's). A room's go under room/, which a goal started from it carries along.
    */
@@ -4644,6 +4765,7 @@ export class Daemon {
       const gg = live?.git ?? this.pastGoalGit(id);
       if (gg) removeAuthors(gg.commonDir, id);
       live?.authorsWatch?.close();
+      for (const r of [...this.godotRuns.values()]) if (r.goal === id) this.roomGodotStop(id, r.file);
       this.store.deleteGoal(id);
       rmSync(dir, { recursive: true, force: true });
       out.deleted.push(id);
@@ -4881,7 +5003,7 @@ export class Daemon {
       for (const e of entries) {
         const full = join(d, e.name);
         if (e.isDirectory()) {
-          if (e.name !== HISTORY) walk(full);
+          if (e.name !== HISTORY && e.name !== GODOT_CACHE) walk(full);
         } else if (/\.(md|txt|json|ya?ml|csv)$/i.test(e.name)) {
           const st = statSync(full);
           out.push({ path: relative(dir, full).split(sep).join('/'), size: st.size, at: st.mtime.toISOString() });
@@ -4995,6 +5117,15 @@ export class Daemon {
         const make = s('make');
         if (!cards.length || !make) throw new Error('room.mix needs "cards" (ids, or {id, take}) and "make" (image, demo, text, ideas or source).');
         return { result: this.roomMix(this.roomId(s('goal')), { cards, make, count: Number(b.count) || 1, note: s('note'), maker: s('maker') }) };
+      }
+      case 'room.godot': {
+        const goal = s('goal'), file = s('file');
+        if (!goal || !file) throw new Error('room.godot needs "goal" and "file".');
+        if (b.stop) {
+          this.roomGodotStop(goal, file);
+          return { result: 'Closed it.' };
+        }
+        return { result: `Opening it on ${this.roomGodot(goal, file)}.` };
       }
       case 'room.end': {
         const id = this.roomId(s('goal'));
@@ -5682,6 +5813,7 @@ export class Daemon {
       clearTimeout(g.landing?.timer);
     }
     this.closing = true;
+    for (const r of [...this.godotRuns.values()]) this.roomGodotStop(r.goal, r.file);
     await this.designIdle();
     const stopping: Promise<unknown>[] = [this.assistant.stop()];
     for (const g of this.goals.values()) {

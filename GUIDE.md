@@ -525,6 +525,11 @@ Home, or a room's header): what to talk about, and the makers.
   prototyper ports its formulas and names the knobs after the real parameters. Tune until it
   feels right, then **Keep these values**: a decision card with the numbers, which a goal
   builds to (opening it plays the demo with those values).
+- **Godot demos:** in a Godot project (or when you ask), the prototyper makes a small Godot
+  project instead of a page, and its card has **▶ Run in Godot**. It opens a window on the
+  machine running MetaHarness, not on your phone if you're on one, and **■ Stop** closes it.
+  Script errors show on the card. The tuning sliders are inside the game; tell the room what
+  you want to keep. MetaHarness runs `godot` from the PATH: set `MH_GODOT` if yours is elsewhere.
 - **The concept card** is the idea as it stands, pillar by pillar (look, feel, mechanics,
   story…), each pointing at the cards it comes from. The lead keeps it as things settle. Only
   you decide: decision cards are what you agreed to.

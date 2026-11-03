@@ -33,10 +33,19 @@ export interface RoomView {
   from?: string;
   /** Lines naming what the room was opened with. */
   attachments?: string[];
+  /** Godot demos opened from their cards, by file. */
+  godot: Record<string, GodotRun>;
+}
+
+export interface GodotRun {
+  state: 'importing' | 'running' | 'stopped';
+  host?: string;
+  errors: string[];
+  problem?: string;
 }
 
 export function roomOf(events: MhEvent[]): RoomView {
-  const v: RoomView = { lenses: [], cards: [], links: [], frames: [], seen: new Map(), messages: [] };
+  const v: RoomView = { lenses: [], cards: [], links: [], frames: [], seen: new Map(), messages: [], godot: {} };
   for (const e of events) {
     const d = e.data as Record<string, unknown>;
     switch (e.type) {
@@ -46,6 +55,9 @@ export function roomOf(events: MhEvent[]): RoomView {
         break;
       case 'room.lenses':
         v.lenses = (d.lenses as Lens[]) ?? [];
+        break;
+      case 'room.godot':
+        v.godot[String(d.file)] = { state: d.state as GodotRun['state'], host: d.host as string | undefined, errors: (d.errors as string[]) ?? [], problem: d.problem as string | undefined };
         break;
       case 'room.canvas': {
         const cards = (d.cards as CanvasCard[]) ?? [];

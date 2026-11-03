@@ -1459,6 +1459,7 @@ details.more { display: grid; gap: 6px; }
 /* A demo, played in a sandbox, with its knobs. */
 .demo-player { display: grid; gap: 8px; }
 .demo-frame { width: 100%; height: 280px; border: 1px solid var(--line-strong); border-radius: 8px; background: #000; }
+.godot-log { margin: 0; padding: 6px 8px; max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11.5px; border: 1px solid var(--line-strong); border-radius: 8px; }
 .knobs { display: grid; gap: 4px; }
 .knob { display: grid; grid-template-columns: minmax(80px, 34%) 1fr auto; gap: 8px; align-items: center; font-size: 12.5px; }
 .knob-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -1505,6 +1505,13 @@ own files go in the shared folder (`room/media/` for images, `room/demos/` for d
   room draws the sliders; **Keep these values** adds a decision card with the `values`, made
   from the demo. When the project has the real code, the prototyper ports its formulas, units
   and timestep and names the knobs after the real parameters, so the kept values carry back.
+- **Godot demos** are a small project in `room/demos/<name>/`, the card's `file` being its
+  `project.godot`. `room.godot` opens it on the daemon's machine (`MH_GODOT`, else `godot`):
+  `--import` headless first when any file is newer than its marker in `.godot/`, then the game
+  in a window; pressing again restarts, `stop` and the daemon closing end it. `room.godot`
+  events carry the state, the host and up to 20 distinct errors from its output, so a remote
+  client sees what happened. The room draws no sliders for these: the game has its own. `.godot/`
+  stays out of the shared folder's history and of what rooms and goals copy from each other.
 - **The concept card** holds the idea pillar by pillar, each pointing at its cards; the lead
   keeps it current.
 - **Asking the lead** (`room.post`): what the human says, optionally about a card (the lead gets

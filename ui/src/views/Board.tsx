@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { CanvasCard, CardKind, Goal, Knob, Lens } from '../types.ts';
-import { CARD_KINDS, demoKnobs, kindOf, MIX_MAKES, TAKES, type RoomView as Room } from '../roomData.ts';
+import { CARD_KINDS, demoKnobs, kindOf, MIX_MAKES, TAKES, type GodotRun, type RoomView as Room } from '../roomData.ts';
 import { CARD_W, edgePoint, frameAt, layoutBoard, type Box } from '../boardLayout.ts';
 import { api, mediaUrl } from '../api.ts';
 import { Dialog, Field, Markdown, useNow } from '../components/common.tsx';
@@ -602,7 +602,7 @@ function CardTile({ card: c, goal, room, color, at, picked, open, dim, lifted, f
         <div className="card-title">{c.title}</div>
       )}
       {c.kind === 'image' && c.file && <img className="card-thumb" src={`${mediaUrl(goal.id, c.file)}&v=${stamp}`} alt={c.title} loading="lazy" draggable={false} />}
-      {c.kind === 'demo' && c.file && <div className="card-play">▶ Open to play and tune</div>}
+      {c.kind === 'demo' && c.file && <div className="card-play">{isGodot(c.file) ? '▶ Open to run in Godot' : '▶ Open to play and tune'}</div>}
       {c.url && <div className="card-more ellipsis">↗ {hostOf(c.url)}</div>}
       {c.pillars?.length ? (
         <ul className="card-pillars">
@@ -723,8 +723,8 @@ function CardPanel({ card: c, goal, room, live, color, files, stamp, onClose, on
             <img className="panel-image" src={`${mediaUrl(goal.id, c.file)}&v=${stamp}`} alt={c.title} />
           </a>
         )}
-        {c.kind === 'demo' && c.file && <DemoPlayer goal={goal} card={c} live={live} stamp={stamp} onCommand={onCommand} />}
-        {tunedFrom && <DemoPlayer goal={goal} card={tunedFrom} live={false} stamp={stamp} start={c.values} />}
+        {c.kind === 'demo' && c.file && (isGodot(c.file) ? <GodotPlayer goal={goal} file={c.file} run={room.godot[c.file]} onCommand={onCommand} /> : <DemoPlayer goal={goal} card={c} live={live} stamp={stamp} onCommand={onCommand} />)}
+        {tunedFrom && (isGodot(tunedFrom.file!) ? <GodotPlayer goal={goal} file={tunedFrom.file!} run={room.godot[tunedFrom.file!]} onCommand={onCommand} /> : <DemoPlayer goal={goal} card={tunedFrom} live={false} stamp={stamp} start={c.values} />)}
         {c.url && (
           <a className="panel-link" href={c.url} target="_blank" rel="noreferrer">
             ↗ {c.url}
@@ -830,6 +830,32 @@ function CardPanel({ card: c, goal, room, live, color, files, stamp, onClose, on
         </div>
       )}
     </aside>
+  );
+}
+
+/** A demo that's a Godot project: its card's file is the project.godot. */
+const isGodot = (file: string) => /(^|\/)project\.godot$/.test(file);
+
+/** A Godot demo: it opens in a window on the machine the daemon runs on, so the button says where. */
+function GodotPlayer({ goal, file, run, onCommand }: { goal: Goal; file: string; run?: GodotRun; onCommand?: Cmd }) {
+  const send = (stop?: boolean) => void onCommand?.({ cmd: 'room.godot', goal: goal.id, file, ...(stop ? { stop: true } : {}) });
+  const on = run && run.state !== 'stopped';
+  return (
+    <div className="demo-player">
+      <div className="row start">
+        <button className="btn small primary" onClick={() => send()} disabled={!onCommand} title="Opens a Godot window on the machine running MetaHarness">
+          {on ? '↻ Restart' : '▶ Run in Godot'}
+        </button>
+        {on && (
+          <button className="btn ghost small" onClick={() => send(true)}>
+            ■ Stop
+          </button>
+        )}
+        {on && <span className="muted small">{run.state === 'importing' ? 'Importing…' : run.host ? `Running on ${run.host}` : 'Running'}</span>}
+      </div>
+      {run?.problem && <pre className="godot-log">{run.problem}</pre>}
+      {!!run?.errors.length && <pre className="godot-log">{run.errors.join('\n')}</pre>}
+    </div>
   );
 }
 
