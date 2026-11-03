@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type ReactNode } from 'react';
-import { api, mediaUrl } from '../api.ts';
+import { api, isImage, mediaUrl } from '../api.ts';
 import { bytes } from '../format.ts';
 
 /**
@@ -93,8 +93,7 @@ export function attachmentsIn(text: string): { said: string; files: AttachedFile
     name: lastName(m[2]),
     path: /\/shared\/((?:room\/)?uploads\/[^/]+)$/.exec(m[2])?.[1],
     note: m[3],
-    // What a browser can show from /media.
-    image: !!m[1] && /\.(png|jpe?g|gif|webp|svg)$/i.test(m[2]),
+    image: !!m[1] && isImage(m[2]),
   }));
   return { said: files.length ? text.replace(LINE, '').trim() : text, files };
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Daemon } from '../src/daemon.ts';
@@ -115,6 +115,26 @@ test('shared files: latest text, a kept version, and nothing outside the folder'
   assert.throws(() => d.sharedFile(goal, '../../token'), /isn't a file in the shared folder/);
   assert.throws(() => d.sharedFile(goal, '.history/design.md/001-architect.md'), /isn't a file/);
   assert.equal(d.sharedFile(goal, 'missing.md').exists, false);
+});
+
+test('shared images: the latest and a kept version, for the browser', async () => {
+  const { d } = setup();
+  const goal = 'abcd1234';
+  const dir = join(d.home, 'goals', goal, 'shared');
+  mkdirSync(join(dir, '.history', 'shot.png'), { recursive: true });
+  writeFileSync(join(dir, 'shot.png'), 'v2');
+  writeFileSync(join(dir, '.history', 'shot.png', '001-illustrator.png'), 'v1');
+  writeFileSync(join(dir, '.history', 'shot.png', '002-illustrator.png'), 'v2');
+  const latest = d.roomMedia(goal, 'shot.png');
+  assert.equal(latest.type, 'image/png');
+  assert.equal(String(latest.body), 'v2');
+  assert.equal(String(d.roomMedia(goal, 'shot.png', undefined, 1).body), 'v1');
+  assert.throws(() => d.roomMedia(goal, 'shot.png', undefined, 9), /Version 9 of shot.png wasn't kept/);
+  assert.throws(() => d.roomMedia(goal, '.history/shot.png/001-illustrator.png'), /isn't an image or a demo/);
+  // A version that's gone from the folder is still there to look at.
+  rmSync(join(dir, 'shot.png'));
+  assert.equal(String(d.roomMedia(goal, 'shot.png', undefined, 2).body), 'v2');
+  assert.throws(() => d.roomMedia(goal, 'shot.png'), /There's no shot.png/);
 });
 
 test('settings: each folder keeps its own settings.json; the repository wins, key by key', async () => {

@@ -910,7 +910,7 @@ the config reloaded at once). The goal workspace: header (switcher, status, time
 workflow; message the team, start an agent, pause all, end, clean up; the lead's note as the
 outcome), **Needs you** band (approvals, decisions, questions) apart from **Updates** (results),
 team tree, and tabs: **Story** (key events as cards, the steps between them folded), **Files**
-(the shared folder rendered, every version, from `GET /file`), graph, sequence, timeline and
+(the shared folder rendered, images as images from `GET /media`, every version, from `GET /file`), graph, sequence, timeline and
 **Log** (every event). Agent detail leads with what it's doing now or its result, shows only
 the controls that apply, and folds tool calls into groups. Long text shows a few lines with
 "Show more"; markdown is rendered as elements, never as HTML. Since then: **Costs**, **Design**

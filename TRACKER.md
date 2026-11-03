@@ -645,6 +645,10 @@ Findings from the run:
   goal and New room forms take files too, through a draft the goal adopts as it starts; they reach
   the lead's brief, not the request, so titles stay clean.
 
+- [x] **Images in the file viewer**. A PNG, JPEG, GIF, WebP or SVG in the shared folder shows as a
+  picture in the Files tab and the side panels, sized to fit, with every kept version. An SVG can
+  still show its source. Tested in a headless browser at desktop and phone width.
+
 - [x] **Folders and sharing** (DESIGN.md §23, GUIDE.md §8). One-level folders under the Roles and
   Workflows tabs, real folders on disk; workflows can name a whole folder of roles. A folder or item
   exports to one file, and importing is a reviewed copy with nothing tracked afterwards. Tested with
@@ -671,7 +675,7 @@ Findings from the run:
 ## Resuming work
 
 ```sh
-npm install && npm test        # 221 tests, about half a minute, no model calls
+npm install && npm test        # 222 tests, about half a minute, no model calls
 node src/cli.ts doctor         # what's installed and signed in here
 node src/cli.ts daemon --fake  # try it without spending anything
 ```

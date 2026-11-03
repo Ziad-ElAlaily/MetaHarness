@@ -416,6 +416,17 @@ const MEDIA_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8',
 };
 
+/** The versions of a shared file kept in its history, oldest first. */
+function keptVersions(dir: string, rel: string): { version: number; by: string; file: string }[] {
+  const histDir = join(dir, HISTORY, rel);
+  if (!existsSync(histDir)) return [];
+  return readdirSync(histDir)
+    .map(f => /^(\d+)-(.+?)(\.[^.]*)?$/.exec(f))
+    .filter((m): m is RegExpExecArray => !!m)
+    .map(m => ({ version: Number(m[1]), by: m[2], file: join(histDir, m[0]) }))
+    .sort((a, b) => a.version - b.version);
+}
+
 export class Daemon {
   readonly home: string;
   readonly store: EventStore;
@@ -4242,14 +4253,16 @@ export class Daemon {
    * room's knobs wired in (starting from `values` when given). Rooms not loaded here are read
    * from where their log says.
    */
-  roomMedia(goalId: string, path: string, values?: Record<string, number>): { type: string; body: Buffer | string } {
+  roomMedia(goalId: string, path: string, values?: Record<string, number>, version?: number): { type: string; body: Buffer | string } {
     if (goalId !== ASSISTANT_STREAM && !/^[0-9a-f-]+$/i.test(goalId)) throw new Error(`There's no room ${goalId}.`);
     const dir = goalId === ASSISTANT_STREAM ? this.assistantShared() : (this.goals.get(goalId)?.sharedDir ?? join(this.home, 'goals', goalId, 'shared'));
     const rel = sharedPath(dir, path);
     const ext = extname(path).toLowerCase();
     const type = MEDIA_TYPES[ext];
     if (!rel || !type || rel.split('/')[0] === HISTORY) throw new Error(`${path} isn't an image or a demo in the room's folder.`);
-    const file = join(dir, rel);
+    const kept = version !== undefined ? keptVersions(dir, rel).find(v => v.version === version) : undefined;
+    if (version !== undefined && !kept) throw new Error(`Version ${version} of ${rel} wasn't kept.`);
+    const file = kept?.file ?? join(dir, rel);
     if (!existsSync(file) || !statSync(file).isFile()) throw new Error(`There's no ${rel} in the room's folder.`);
     if (ext === '.html' || ext === '.htm') return { type, body: demoPage(readFileSync(file, 'utf8'), values) };
     return { type, body: readFileSync(file) };
@@ -5644,14 +5657,7 @@ export class Daemon {
     const dir = this.goals.get(goalId)?.sharedDir ?? join(this.home, 'goals', goalId, 'shared');
     const rel = normalize(path).replace(/^([/\\])+/, '');
     if (!rel || rel.startsWith('..') || rel.split(sep)[0] === HISTORY) throw new Error(`${path} isn't a file in the shared folder.`);
-    const histDir = join(dir, HISTORY, rel);
-    const versions = existsSync(histDir)
-      ? readdirSync(histDir)
-          .map(f => /^(\d+)-(.+?)(\.[^.]*)?$/.exec(f))
-          .filter((m): m is RegExpExecArray => !!m)
-          .map(m => ({ version: Number(m[1]), by: m[2], file: join(histDir, m[0]) }))
-          .sort((a, b) => a.version - b.version)
-      : [];
+    const versions = keptVersions(dir, rel);
     const pick = version !== undefined ? versions.find(v => v.version === version) : undefined;
     if (version !== undefined && !pick) throw new Error(`Version ${version} of ${rel} wasn't kept.`);
     const file = pick?.file ?? join(dir, rel);

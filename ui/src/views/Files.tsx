@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api } from '../api.ts';
+import { api, isImage, mediaUrl } from '../api.ts';
 import { ago, who } from '../format.ts';
 import type { Goal, MhEvent, SharedFileView } from '../types.ts';
 import { CopyText, Markdown } from '../components/common.tsx';
@@ -80,6 +80,8 @@ export function Viewer({ goal, file, onSelectAgent, onGoalFrom }: { goal: Goal; 
   const [error, setError] = useState<string>();
   const [raw, setRaw] = useState(false);
   const md = /\.(md|markdown|txt)$/i.test(file.path);
+  // An SVG is both: a picture, with text behind it.
+  const hasSource = md || /\.svg$/i.test(file.path);
   useEffect(() => {
     let alive = true;
     api.file(goal.id, file.path, version).then(
@@ -91,6 +93,9 @@ export function Viewer({ goal, file, onSelectAgent, onGoalFrom }: { goal: Goal; 
     };
     // A new version reloads the latest.
   }, [goal.id, file.path, version, version === undefined ? file.version : 0]);
+  const showImage = isImage(file.path) && !!view?.exists && !raw;
+  // &v= so a new version of the file shows as soon as it's written.
+  const src = `${mediaUrl(goal.id, file.path)}${version !== undefined ? `&version=${version}` : ''}&v=${file.version}`;
 
   return (
     <>
@@ -127,7 +132,7 @@ export function Viewer({ goal, file, onSelectAgent, onGoalFrom }: { goal: Goal; 
               ))}
             </select>
           )}
-          {md && (
+          {hasSource && (
             <button className={`btn small${raw ? ' on' : ''}`} onClick={() => setRaw(r => !r)}>
               {raw ? 'Rendered' : 'Source'}
             </button>
@@ -142,11 +147,23 @@ export function Viewer({ goal, file, onSelectAgent, onGoalFrom }: { goal: Goal; 
       <div className="scroll file-body">
         {error && <div className="error-text">{error}</div>}
         {view && !view.exists && <div className="empty">This file isn't there any more{view.versions.length ? '; pick a kept version above.' : '.'}</div>}
-        {view?.binary && <div className="empty">This isn't a text file ({Math.round(view.size / 1024)} KB).</div>}
-        {view?.text != null && (md && !raw ? <Markdown text={view.text} className="doc" /> : <pre className="code">{view.text}</pre>)}
+        {showImage && <SharedImage key={src} src={src} name={file.path} size={view.size} />}
+        {view?.binary && !showImage && <div className="empty">This isn't a text file ({Math.round(view.size / 1024)} KB).</div>}
+        {view?.text != null && !showImage && (md && !raw ? <Markdown text={view.text} className="doc" /> : <pre className="code">{view.text}</pre>)}
         {view && <CopyText text={`${goal.sharedDir}/${file.path}`} />}
       </div>
     </>
+  );
+}
+
+/** A picture in the viewer, or what's known about it if the browser can't draw it. */
+function SharedImage({ src, name, size }: { src: string; name: string; size: number }) {
+  const [broken, setBroken] = useState(false);
+  if (broken) return <div className="empty">This image can't be shown ({Math.round(size / 1024)} KB).</div>;
+  return (
+    <a className="file-image" href={src} target="_blank" rel="noreferrer" title="Open it full size">
+      <img src={src} alt={name} onError={() => setBroken(true)} />
+    </a>
   );
 }
 

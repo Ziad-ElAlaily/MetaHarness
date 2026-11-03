@@ -73,12 +73,12 @@ async function handle(d: Daemon, token: string, req: IncomingMessage, res: Serve
       if (!goal || !path) return json(res, 400, { error: 'GET /file needs ?goal=<id>&path=<path in the shared folder>.' });
       return json(res, 200, d.sharedFile(goal, path, v ? Number(v) : undefined));
     }
-    // A room's images and demos (design §21). A demo page runs sandboxed: it can't reach the app or its token.
+    // A shared folder's images, and a room's demos (design §21). A demo page runs sandboxed: it can't reach the app or its token.
     if (req.method === 'GET' && url.pathname === '/media') {
       const goal = url.searchParams.get('goal'), path = url.searchParams.get('path');
       if (!goal || !path) return json(res, 400, { error: 'GET /media needs ?goal=<room>&path=<file in its shared folder>.' });
-      const raw = url.searchParams.get('values');
-      const m = d.roomMedia(goal, path, raw ? (JSON.parse(raw) as Record<string, number>) : undefined);
+      const raw = url.searchParams.get('values'), v = url.searchParams.get('version');
+      const m = d.roomMedia(goal, path, raw ? (JSON.parse(raw) as Record<string, number>) : undefined, v ? Number(v) : undefined);
       res.writeHead(200, {
         'content-type': m.type, 'cache-control': 'no-cache',
         // An SVG opened in a tab runs its scripts too, and it may be a file from anywhere.

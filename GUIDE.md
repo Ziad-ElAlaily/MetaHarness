@@ -420,7 +420,7 @@ guidelines), **Behaviour** (rules, settings) and **Machine** (harnesses, tools a
       design); **Whole goal** shows everything since the goal started (what a pull request
       would hold), and **Uncommitted** what's changed but not committed, in your checkout or an
       agent's worktree. An agent's commits in its **Changes** open here.
-    - **Files:** the shared folder: designs, reviews and reports, rendered, with every version
+    - **Files:** the shared folder: designs, reviews and reports, rendered, images as pictures, with every version
       and who wrote it.
     - **Graph**, with its views **Map**, **Messages** and **Busy:** who talks to whom,
       messages in order, who was busy when. The graph is live: each card shows the step its agent is on and for how long,
