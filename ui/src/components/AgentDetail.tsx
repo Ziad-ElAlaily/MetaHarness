@@ -79,6 +79,7 @@ function streamOf(events: MhEvent[], name: string): Item[] {
       case 'agent.limited':
       case 'agent.crashed':
       case 'agent.silent':
+      case 'agent.wait_loop':
       case 'agent.ended':
       case 'agent.idle':
       case 'agent.done_held':
@@ -90,7 +91,7 @@ function streamOf(events: MhEvent[], name: string): Item[] {
       case 'shared.clash':
       case 'rule.fired':
       case 'skill.read':
-        out.push({ kind: 'note', seq: e.seq, ts: e.ts, text: noteText(e), warn: ['agent.crashed', 'agent.silent', 'git.conflict', 'shared.clash', 'agent.limited', 'agent.moved'].includes(e.type) });
+        out.push({ kind: 'note', seq: e.seq, ts: e.ts, text: noteText(e), warn: ['agent.crashed', 'agent.silent', 'agent.wait_loop', 'git.conflict', 'shared.clash', 'agent.limited', 'agent.moved'].includes(e.type) });
         break;
     }
   }
@@ -110,6 +111,7 @@ function noteText(e: MhEvent): string {
     case 'agent.context_handoff': return `continues in a fresh session from a handoff (context was ${d.pct}% full)`;
     case 'agent.crashed': return `crashed: ${d.reason}`;
     case 'agent.silent': return `nothing from its harness for ${d.minutes} min mid-turn${d.warning ? ` (last warning: ${d.warning})` : ''}; told ${d.told === 'human' ? 'you' : d.told}`;
+    case 'agent.wait_loop': return `${d.refused ? 'wait refused: it would never wake, waiting' : 'still waiting'} in a loop with ${(d.loop as string[]).join(', ')}${d.refused ? '' : '; told the lead'}`;
     case 'agent.ended': return `ended: ${d.reason}`;
     case 'agent.idle': return 'stopped without calling done';
     case 'agent.done_held': return `called done while ${(d.working as string[]).join(', ')} still work: told to deal with them first`;

@@ -147,6 +147,12 @@ export interface AgentRec {
   progressAt: number;
   /** The teammate it last spawned, was spawned by, or messaged with: who it's most likely waiting on. */
   lastPartner?: { name: string; at: number; text: string; sent: boolean };
+  /** What the wait it's in says: who it expects something from, and what. Nobody named, with a what: it's something of its own, like a build. */
+  waitOn?: { who: string[]; what?: string };
+  /** When it last used one of its harness's tools rather than ours: real work, unlike talking about it. */
+  workedAt?: number;
+  /** The last wait it was refused for closing a loop (see waitRefused). */
+  loopRefused?: { key: string; at: number; told?: boolean };
   /** The progressAt its stall was last reported at, so each stuck spell is reported once. */
   stallReported?: number;
   /** When its harness last reported anything (a turn starting, a reply, a tool call or result, tokens), for silent-turn reports. */
@@ -371,6 +377,8 @@ const MIN_CONTEXT_GAIN = 20;
 
 /** Our own tools that don't move work along: an agent calling only these is waiting. */
 const WAITING_TOOLS = /(^|[_.])(wait|status|team)$/;
+/** MetaHarness's own tools, as a harness reports them. */
+const isOwnTool = (tool: string) => (TOOL_NAMES as readonly string[]).includes(tool.replace(/^(mcp__)?metaharness[_.:/-]+/, ''));
 
 type GoalStatus = 'running' | 'done' | 'ended' | 'stopped';
 
@@ -1132,6 +1140,7 @@ export class Daemon {
         rec.toolsRunning++;
         rec.lastCallAt = Date.now();
         if (!WAITING_TOOLS.test(tool)) this.touch(rec);
+        if (!isOwnTool(tool)) rec.workedAt = Date.now();
         this.noteGitActor(rec, summary);
         this.noteSharedTouch(rec, summary);
         const touched = this.repoPaths(rec, tool, summary, info);
@@ -1625,6 +1634,7 @@ export class Daemon {
   setState(rec: AgentRec, state: AgentState): void {
     if (rec.state === state) return;
     rec.state = state;
+    if (state !== 'waiting') rec.waitOn = undefined;
     if (state === 'done' || state === 'idle') rec.settledAt = Date.now();
     this.emit({ goal: rec.goal, agent: rec.name, type: 'agent.state', data: { state } });
     if (['done', 'idle', 'ended', 'crashed'].includes(state)) this.cleanUpIfIdle(this.goals.get(rec.goal)!);
@@ -2363,8 +2373,7 @@ export class Daemon {
   private repoPaths(rec: AgentRec, tool: string, summary: string, info?: ToolInfo): { paths: string[]; edit?: true } {
     const g = this.goals.get(rec.goal);
     // MetaHarness's own tools (a message naming a file) aren't work on the code.
-    const own = (TOOL_NAMES as readonly string[]).includes(tool.replace(/^(mcp__)?metaharness[_.:/-]+/, ''));
-    if (!g?.git || own || FINISHED.includes(rec.state)) return { paths: [] };
+    if (!g?.git || isOwnTool(tool) || FINISHED.includes(rec.state)) return { paths: [] };
     const { paths, edit } = toolPaths(tool, summary, rec.cwd, info);
     if (!paths.length) return { paths: [] };
     const root = [...g.agents.values()].map(a => a.worktree?.path).find(w => w && (rec.cwd === w || rec.cwd.startsWith(w + sep))) ?? g.git.repo;
@@ -3213,6 +3222,124 @@ export class Daemon {
       if (e.kind !== 'message') continue;
       this.emit({ goal: rec.goal, agent: rec.name, type: 'message.delivered', data: { id: e.id, from: e.from, via } });
     }
+  }
+
+  /**
+   * Whether a wait should go ahead (DESIGN.md §8); the reply if not. It notes who the agent waits
+   * on and what for. A wait that would close a loop is refused with what the others wait for, as
+   * a message from it is all that gets things moving. Refused once: if the same loop closes again
+   * with no real work in between, the wait goes ahead. An agent that named who it waits on means
+   * it, so the lead hears now, as their messages may keep the stall report from firing; a guessed
+   * target wakes nobody, and the stall report is there if it was right.
+   */
+  waitRefused(rec: AgentRec, timeoutSec: number, on?: string, what?: string): string | undefined {
+    rec.waitOn = undefined;
+    // It won't block, so it can't close anything.
+    if (rec.inbox.length || timeoutSec <= 0) return undefined;
+    const g = this.goals.get(rec.goal)!;
+    if (on) {
+      const r = /^(human|you|user)$/i.test(on) ? { names: ['human'] } : this.resolveRecipients(g, rec.name, on);
+      if ('error' in r) return `Not waiting yet. ${r.error}`;
+      rec.waitOn = { who: r.names, ...(what ? { what } : {}) };
+    } else if (what) {
+      rec.waitOn = { who: [], what };
+    }
+    if (!g.project.config.settings.stallMinutes || g.room) return undefined;
+    const others = this.waitLoop(g, rec);
+    if (!others) return undefined;
+    const loop = [rec, ...others];
+    const key = loop.map(a => a.name).sort().join(',');
+    const last = rec.loopRefused;
+    if (last?.key === key && !loop.some(a => (a.workedAt ?? 0) > last.at)) {
+      const lead = this.liveLead(g);
+      if (on && !last.told && lead && lead !== rec) {
+        last.told = true;
+        this.reportLoop(g, rec, loop, lead);
+      }
+      return undefined;
+    }
+    rec.loopRefused = { key, at: Date.now() };
+    rec.waitOn = undefined;
+    this.emit({ goal: g.id, agent: rec.name, type: 'agent.wait_loop', data: { loop: others.map(a => a.name), refused: true } });
+    const first = others[0];
+    const closer = others[others.length - 1];
+    const head = others.length === 1
+      ? `You didn't start waiting: ${first.name} is already waiting on you, so neither of you would ever wake.`
+      : `You didn't start waiting: you, ${others.map(a => a.name).join(', ')} would each be waiting on the next, in a loop, and none of you would ever wake.`;
+    const lead = this.liveLead(g);
+    return (
+      `${head}\n${this.loopLines(loop.slice(1), loop, rec).join('\n')}\n` +
+      `If what ${closer.name} needs is yours to do, do it and tell ${closer.name}. If you need something from ${first.name} first, send it exactly what${what ? ` ("${what}")` : ''}: a message wakes it. ` +
+      `If it's someone else you're waiting for, say who with on; if it's something of your own, like a build, say what with for and no on.` +
+      (lead && lead !== rec ? ` If you can't settle it between you, ask ${lead.name}.` : '')
+    );
+  }
+
+  /**
+   * The rest of the loop this agent's wait would close, in order, if it would never wake: everyone
+   * it can be woken by is asleep too, right back round to it. A wait ends at the first message from
+   * anyone, so someone still able to move (one more teammate working, the human) means it isn't
+   * stuck yet, whatever else is circular, and so does not knowing who an agent waits on.
+   */
+  private waitLoop(g: GoalRec, rec: AgentRec): AgentRec[] | undefined {
+    // A wait that has just been answered still says waiting, for a moment, but has no waiter.
+    const asleep = (a: AgentRec) => ((a.state === 'waiting' && a.waiters.length > 0) || a.state === 'idle') && !a.quick && !a.held && !a.inbox.length && !a.pendingApprovals;
+    const cameFrom = new Map<AgentRec, AgentRec>();
+    const queue = [rec];
+    let closes: AgentRec | undefined;
+    for (const a of queue) {
+      // Waiting for something of its own, like a build: it can move by itself.
+      if (a.waitOn && !a.waitOn.who.length) return undefined;
+      const on = this.holdUp(g, a);
+      if (!on) return undefined;
+      for (const name of on.who) {
+        const p = g.agents.get(name);
+        if (p === rec) {
+          closes ??= a;
+          continue;
+        }
+        if (!p || !asleep(p)) return undefined;
+        if (!cameFrom.has(p)) {
+          cameFrom.set(p, a);
+          queue.push(p);
+        }
+      }
+    }
+    if (!closes) return undefined;
+    const others: AgentRec[] = [];
+    for (let a = closes; a !== rec; a = cameFrom.get(a)!) others.unshift(a);
+    return others;
+  }
+
+  /** What each of these agents in a loop waits for, for an agent's refusal or the lead's report. */
+  private loopLines(these: AgentRec[], loop: AgentRec[], reader?: AgentRec): string[] {
+    const named = (a: AgentRec) => (a === reader ? 'you' : a.name);
+    return these.map(a => {
+      const next = loop[(loop.indexOf(a) + 1) % loop.length];
+      const p = a.lastPartner;
+      const expects = a.waitOn?.what ? ` for "${a.waitOn.what}"`
+        : next.parent === a.name ? ` for the result of the work it gave ${named(next)}`
+        : p?.name === next.name ? `; last it ${p.sent ? 'said' : 'heard'}: "${p.text.replace(/\s+/g, ' ').slice(0, 160)}"`
+        : '';
+      const how = a.state === 'idle' ? 'has stopped until a message reaches it, expecting something from' : 'is waiting on';
+      return `- ${a.name} ${how} ${named(next)}${expects}.`;
+    });
+  }
+
+  /** A refused loop closed again, between agents that said who they wait on: the lead decides. */
+  private reportLoop(g: GoalRec, rec: AgentRec, loop: AgentRec[], lead: AgentRec): void {
+    this.emit({ goal: g.id, agent: rec.name, type: 'agent.wait_loop', data: { loop: loop.slice(1).map(a => a.name), refused: false } });
+    this.notice(
+      lead,
+      `${loop.map(a => a.name).join(', ')} are waiting on each other in a loop, and being told so once didn't settle it:\n${this.loopLines(loop, loop).join('\n')}\n` +
+        `They need someone to decide who goes first: answer what they're waiting for, pass on what they need, change the plan, or tell one to wrap up and call done.`,
+    );
+  }
+
+  /** The lead, if it's still there to hear. */
+  private liveLead(g: GoalRec): AgentRec | undefined {
+    const lead = g.agents.get(g.lead);
+    return lead && !FINISHED.includes(lead.state) && lead.doneNote === undefined ? lead : undefined;
   }
 
   /** Blocks until a message or a finished teammate arrives, or the timeout passes. */
@@ -4431,11 +4558,23 @@ export class Daemon {
    */
   private waitingOn(g: GoalRec, a: AgentRec): { who: string[]; why: 'approval' | 'question' | 'decision' | 'helpers' | 'partner' } | null {
     if (a.pendingApprovals) return { who: [this.leadAsks.has(a) ? g.lead : 'human'], why: 'approval' };
-    if (a.state !== 'waiting') return null;
+    return a.state === 'waiting' ? this.holdUp(g, a) : null;
+  }
+
+  /**
+   * Who could end an agent's wait, as far as anyone can tell: the human it asked, the teammates it
+   * spawned that still work and whoever it named, or else (unless it said it's something of its
+   * own) whoever it last dealt with.
+   */
+  private holdUp(g: GoalRec, a: AgentRec): { who: string[]; why: 'question' | 'decision' | 'helpers' | 'partner' } | null {
     const asked = !this.away && this.humanInbox.find(i => i.goal === g.id && i.agent === a.name && (i.kind === 'question' || i.kind === 'decision'));
     if (asked) return { who: ['human'], why: asked.kind as 'question' | 'decision' };
     const kids = [...g.agents.values()].filter(c => c.parent === a.name && !FINISHED.includes(c.state) && c.doneNote === undefined).map(c => c.name);
+    const named = a.waitOn?.who ?? [];
+    if (named.length) return { who: [...new Set([...kids, ...named])], why: 'partner' };
     if (kids.length) return { who: kids, why: 'helpers' };
+    // It said what it waits for, and it isn't a teammate: no guessing.
+    if (a.waitOn) return null;
     const p = a.lastPartner?.name;
     return p && (p === 'human' || g.agents.has(p)) ? { who: [p], why: 'partner' } : null;
   }

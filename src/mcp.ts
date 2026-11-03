@@ -19,7 +19,7 @@ const SCHEMAS: Record<(typeof TOOL_NAMES)[number], z.ZodType> = {
   spawn: z.looseObject({ role: z.string().optional(), brief: z.string().optional(), quick: flexible.optional(), name: z.string().optional(), worktree: flexible.optional(), from: z.string().optional(), patch: flexible.optional() }),
   respawn: z.looseObject({ name: z.string().optional(), fresh: flexible.optional(), on: z.string().optional(), note: z.string().optional() }),
   send: z.looseObject({ to: z.string().optional(), text: z.string().optional(), urgent: flexible.optional(), decision: flexible.optional() }),
-  wait: z.looseObject({ timeout: flexible.optional() }),
+  wait: z.looseObject({ timeout: flexible.optional(), on: z.string().optional(), for: z.string().optional() }),
   status: z.looseObject({ text: z.string().optional() }),
   done: z.looseObject({ note: z.string().optional() }),
   workflow: z.looseObject({ name: z.string().optional() }),

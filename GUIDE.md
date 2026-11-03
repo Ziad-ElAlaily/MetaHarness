@@ -608,6 +608,11 @@ Home, or a room's header): what to talk about, and the makers.
   notes, then continues in a fresh session from a handoff: the goal, its brief, what it did, its
   team and where its work is. An agent between turns switches when its next message comes, so
   it costs no extra turn. Antigravity doesn't report its context, so its own compaction applies.
+- **Agents waiting on each other.** When an agent's `wait` would close a loop, with nobody left
+  who could wake any of them, it's refused and the agent is told what the others are waiting
+  for, so one of them says what it needs. If the same loop closes again with no real work done
+  and the agent named who it's waiting on, the lead hears straight away. You hear through the
+  stuck-agent reports below.
 - **Stuck agents.** Agents that have only waited for 10 minutes (Settings), while the teammate
   they're waiting on is waiting too or has finished, or nobody on the team is doing anything,
   are reported to the lead, who sorts it out. You hear only when the lead has finished, or the

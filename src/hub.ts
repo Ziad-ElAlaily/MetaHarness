@@ -40,8 +40,12 @@ export const TOOL_DOCS: Record<(typeof TOOL_NAMES)[number], { description: strin
     },
   },
   wait: {
-    description: 'Pause until a message arrives or a teammate you spawned finishes. timeout 0 just checks.',
-    params: { timeout: 'Seconds to wait (default 60)' },
+    description: "Pause until a message arrives or a teammate you spawned finishes. timeout 0 just checks. Say who you're waiting on and for what: if they're already waiting on you, you'll be told instead of waiting forever.",
+    params: {
+      timeout: 'Seconds to wait (default 60)',
+      on: 'Who you expect something from: a teammate, a role, lead or human',
+      for: "What you expect, in a few words. Without on, it's something of your own, like a build or a timer",
+    },
   },
   status: { description: 'Post a one-line progress update for the human and your teammates.', params: { text: 'What you are doing now' } },
   done: { description: "Say you're finished. The note goes to whoever spawned you. Held while teammates you spawned still work: their results first.", params: { note: 'What you did and where it is' } },
@@ -185,6 +189,10 @@ export class Hub {
       case 'wait': {
         const t = Number(pick(a, 'timeout', 'seconds', 'timeout_s', 'secs'));
         const timeout = Number.isFinite(t) ? Math.min(Math.max(t, 0), 600) : 60;
+        const on = str(pick(a, 'on', 'waiting_on', 'teammate', 'agent', 'who', 'from'));
+        const what = str(pick(a, 'for', 'what', 'reason', 'about', 'need'));
+        const refused = d.waitRefused(rec, timeout, on, what);
+        if (refused) return refused;
         const entries = await d.wait(rec, timeout);
         if (entries.length) return formatWait(entries);
         return timeout === 0 ? 'Nothing new.' : `Nothing new after ${timeout}s.`;

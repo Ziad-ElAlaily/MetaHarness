@@ -30,7 +30,8 @@ export interface Config {
 const DEFAULT_METHODOLOGY = `You're part of a team of AI agents from different providers working toward one goal.
 Call \`team\` to see who's on it. Put long things in the shared folder and keep messages short.
 Ask the person who knows (\`send\`) instead of guessing. Post a \`status\` line when you start
-something new. When finished, call \`done\` with a short note on what you did and where it is.`;
+something new. When you \`wait\` for a teammate, say who (\`on\`) and what for (\`for\`).
+When finished, call \`done\` with a short note on what you did and where it is.`;
 
 const DEFAULT_HELPER_METHODOLOGY = `You're a quick helper for another AI agent. Answer the brief and nothing more.
 Keep it short, then call \`done\` with the answer as the note.`;

@@ -215,6 +215,13 @@ Findings from the run:
       or helpers of its own that still work. Once per stuck spell; the human gets a `stalled`
       Inbox item (reply goes to the lead) when the lead has finished, or the whole team stays
       stuck another `stallMinutes` after the lead was told. Scripted tests only; not seen live
+- [x] **Wait loops caught as they close** (2026-11-03, DESIGN.md §8): `wait` takes `on` and `for`,
+      and falls back on who an agent spawned or last dealt with; `for` alone means something of its
+      own, like a build, which is never a loop. A wait is refused when everyone who could end it
+      is asleep too, right back round to it, and the reply says what each waits for. The same loop
+      closing again with no real work in between lets the wait go ahead; if the agent named its
+      target, the lead hears at once (`agent.wait_loop`). The human hears only through the stall
+      report. Off with `stallMinutes` 0; not in rooms. Scripted tests only; not seen live
 - [x] **Rules** (2026-10-19, DESIGN.md §18, `src/rules.ts`): markdown notes that reach an agent at
       a moment the daemon sees (`start`, `path`, `new-file`, `commit`, `done`), filtered by role
       and path, delivered like change notices (a running turn gets them, an idle agent with

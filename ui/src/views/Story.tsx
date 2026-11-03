@@ -267,6 +267,7 @@ function Card({ e, name, onOpenFile }: { e: MhEvent; name: (n?: string) => React
       );
     case 'agent.crashed':
     case 'agent.silent':
+    case 'agent.wait_loop':
     case 'agent.ended':
     case 'agent.idle':
     case 'agent.moved':

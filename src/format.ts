@@ -53,6 +53,8 @@ export function eventLine(e: MhEvent): string {
       return `${t}  ${who}is the ${/-stalled(-\d+)?$/.test(d.to) ? 'hung' : 'crashed'} ${d.from}, kept under this name: ${d.by === 'human' ? 'you' : d.by} respawned ${d.from}`;
     case 'agent.silent':
       return `${t}  ${who}⚠ nothing from its harness for ${d.minutes} min mid-turn${d.warning ? ` (last warning: ${oneLine(d.warning)})` : ''}; told ${d.told === 'human' ? 'you' : d.told}`;
+    case 'agent.wait_loop':
+      return `${t}  ${who}⚠ ${d.refused ? 'wait refused: it would never wake, waiting' : 'still waiting'} in a loop with ${d.loop.join(', ')}${d.refused ? '' : '; told the lead'}`;
     case 'git.commit':
       return `${t}  ${who}committed on ${d.branch}: ${oneLine(d.summary)}`;
     case 'git.merge':
