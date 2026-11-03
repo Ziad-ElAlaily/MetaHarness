@@ -547,7 +547,7 @@ do, the CLI can do too, and vice versa.
 | `GET /browse?path&hidden` | The daemon's folders, one at a time, for Open folder: each says whether it's a git repository, has its own `.metaharness`, or is a project |
 | `GET /agent?goal=<id>&name=<agent>` | One agent in full: its system prompt, brief, folder, worktree and copied dependencies, native session, the command to open it by hand, its harness's manifest |
 | `POST /commands` | Every action a client can take, including `folder.*` and `share.*` (§23) |
-| `POST /upload?goal=<id>&name=<file>` | A file the human is attaching to a message; the body is its bytes (up to 100 MB). `goal` can be `assistant`. Kept in that goal's shared folder under `uploads/` (a room's under `room/uploads/`), never over another file, and returns where: `{ path, abs, size }` |
+| `POST /upload?goal=<id>&name=<file>` | A file the human is attaching to a message; the body is its bytes (up to 100 MB). `goal` can be `assistant`, or a `draft-<hex>` for a goal or room about to start. Kept in that goal's shared folder under `uploads/` (a room's under `room/uploads/`), never over another file, and returns where: `{ path, abs, size }` |
 
 The API listens on `localhost:7777` (configurable), and clients authenticate with a token
 stored in `~/.metaharness/token`, as a bearer header or `?token=` (for `EventSource`). The web
@@ -724,6 +724,16 @@ The agent reads it with its usual tools; the shared folder is already readable o
 The app turns that line back into a picture or a chip wherever it shows the message, and into just
 the file's name in views with one line of room. Only whoever the message goes to hears of the file:
 it's left out of the shared folder's change notices, and credited to you in the log.
+
+**Starting with files.** The New goal and New room forms take files the same ways, but a goal has
+no shared folder until it starts. So they upload to a draft (`~/.metaharness/drafts/<id>/`), and
+`goal.start` or `room.start` names it: `attach: { draft, lines }`. The goal links the files into its
+shared folder, points the lines there, and the draft goes once its lead has started. A start that
+fails keeps the draft, so trying again doesn't upload anything twice; one given up on is swept after
+a day. The request stays as you wrote it, because it's the goal's title and what teammates are told:
+the lines go on `goal.started` (`attachments`), for the app to show, and in the lead's brief. So
+only the lead hears of them at first, and it passes on the paths to whoever needs them. A brief
+outlasts a fresh session, so the lead keeps them after a handoff too.
 
 **Big images.** An image an agent has looked at goes with every later call to its model, and a big
 one can hang the agent (§8: a 2.8 MB PNG did). A phone photo is well past that. So an image over

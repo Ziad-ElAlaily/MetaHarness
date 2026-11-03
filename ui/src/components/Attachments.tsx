@@ -60,6 +60,15 @@ async function uploadOne(goal: string, file: File): Promise<string> {
   return `[Attached image: ${saved.abs} (${bytes(saved.size)}${saved.size > SMALL_BYTES ? ': too big to look at directly, so make a smaller copy first' : ''})]`;
 }
 
+/**
+ * A new goal or room has no shared folder until it starts, so its files wait in a draft. Not
+ * crypto.randomUUID: that needs https, and a phone may well reach the app over plain http.
+ */
+export const newDraft = () => `draft-${[...crypto.getRandomValues(new Uint8Array(12))].map(b => b.toString(16).padStart(2, '0')).join('')}`;
+
+/** What goal.start and room.start take for the files uploaded to a draft. */
+export const startFiles = (draft: string, lines: string[]) => (lines.length ? { attach: { draft, lines } } : {});
+
 /** A message's text with what's attached to it, for sending. */
 export function withAttachments(text: string, lines: string[]): string {
   return [text.trim(), lines.join('\n')].filter(Boolean).join('\n\n');

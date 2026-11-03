@@ -1,4 +1,4 @@
-import { AttachButton, Drafts, useAttachments, withAttachments } from './Attachments.tsx';
+import { AttachButton, Drafts, newDraft, startFiles, useAttachments, withAttachments } from './Attachments.tsx';
 import { useEffect, useState } from 'react';
 import { api } from '../api.ts';
 import type { ConfigView, Goal } from '../types.ts';
@@ -24,12 +24,18 @@ export function NewGoalForm({ config, onStart, onCancel, initialWorkflow = '', i
   const leadName = lead || (leads.find(r => r.name === 'architect') ?? leads[0])?.name || '';
   const leadDef = leads.find(r => r.name === leadName);
   const wf = config?.workflows.find(w => w.name === workflow);
+  const [draft] = useState(newDraft);
+  const attachments = useAttachments(draft);
   const start = async () => {
     if (!request.trim() || busy) return;
     setBusy(true);
-    const ok = await onStart({ cmd: 'goal.start', request: request.trim(), lead: leadName || undefined, workflow: workflow || undefined, ...extra });
+    const lines = await attachments.upload();
+    const ok = lines && (await onStart({ cmd: 'goal.start', request: request.trim(), lead: leadName || undefined, workflow: workflow || undefined, ...startFiles(draft, lines), ...extra }));
     setBusy(false);
-    if (ok) setRequest('');
+    if (ok) {
+      setRequest('');
+      attachments.clear();
+    }
   };
   return (
     <div className="new-goal">
@@ -39,9 +45,14 @@ export function NewGoalForm({ config, onStart, onCancel, initialWorkflow = '', i
         value={request}
         onChange={e => setRequest(e.target.value)}
         onKeyDown={e => e.key === 'Enter' && (e.ctrlKey || e.metaKey) && void start()}
+        onPaste={attachments.onPaste}
         placeholder="What should the team do? e.g. Add per-user rate limiting to /api/upload, with tests."
         aria-label="What should the team do?"
       />
+      <div className="attach-area" ref={attachments.zone}>
+        <Drafts a={attachments} />
+        <AttachButton a={attachments} />
+      </div>
       <div className="new-goal-opts">
         <Field label="Lead" hint={leadDef ? `${leadDef.harness} · ${modelLabel(leadDef)}${leadDef.goodAt ? ` — ${leadDef.goodAt}` : ''}` : undefined}>
           <select value={leadName} onChange={e => setLead(e.target.value)}>
@@ -88,7 +99,7 @@ export function NewGoalForm({ config, onStart, onCancel, initialWorkflow = '', i
           </button>
         )}
         <button className="btn primary" disabled={!request.trim() || busy} onClick={() => void start()}>
-          {busy ? 'Starting…' : 'Start the goal'}
+          {attachments.busy ? 'Uploading…' : busy ? 'Starting…' : 'Start the goal'}
         </button>
       </div>
     </div>

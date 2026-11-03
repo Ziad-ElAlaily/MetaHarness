@@ -31,6 +31,8 @@ export interface RoomView {
   seen: Map<string, { added: number; changed: number }>;
   messages: RoomMsg[];
   from?: string;
+  /** Lines naming what the room was opened with. */
+  attachments?: string[];
 }
 
 export function roomOf(events: MhEvent[]): RoomView {
@@ -40,6 +42,7 @@ export function roomOf(events: MhEvent[]): RoomView {
     switch (e.type) {
       case 'goal.started':
         v.from = typeof d.from === 'string' ? d.from : undefined;
+        v.attachments = d.attachments as string[] | undefined;
         break;
       case 'room.lenses':
         v.lenses = (d.lenses as Lens[]) ?? [];

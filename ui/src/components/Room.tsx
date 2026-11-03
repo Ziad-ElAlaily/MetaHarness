@@ -1,3 +1,4 @@
+import { AttachButton, Drafts, newDraft, startFiles, useAttachments } from './Attachments.tsx';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ConfigView, Goal, GoalSummary, Lens, MhEvent, Snapshot } from '../types.ts';
 import { ago, duration, money } from '../format.ts';
@@ -174,10 +175,13 @@ export function NewRoomDialog({ config, from, onClose, onStart, onCommand }: {
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState<string>();
   const lead = config?.roles.find(r => r.name === config.settings.effective.roomLead);
+  const [draft] = useState(newDraft);
+  const attachments = useAttachments(draft);
   const start = async () => {
     if (!topic.trim() || busy) return;
     setBusy(true);
-    const ok = await onStart({ cmd: 'room.start', topic: topic.trim(), lenses, from: from?.id, ...(branching ? { cards: from!.cards!.map(c => c.id) } : {}) });
+    const lines = await attachments.upload();
+    const ok = lines && (await onStart({ cmd: 'room.start', topic: topic.trim(), lenses, from: from?.id, ...startFiles(draft, lines), ...(branching ? { cards: from!.cards!.map(c => c.id) } : {}) }));
     setBusy(false);
     if (ok) onClose();
   };
@@ -200,8 +204,12 @@ export function NewRoomDialog({ config, from, onClose, onStart, onCommand }: {
         )}
       </div>
       <Field label="What to talk about">
-        <textarea autoFocus rows={3} value={topic} onChange={e => setTopic(e.target.value)} onKeyDown={e => e.key === 'Enter' && (e.ctrlKey || e.metaKey) && void start()} placeholder="e.g. What should the jump feel like? Or: a game about tides, what's the hook?" />
+        <textarea autoFocus rows={3} value={topic} onChange={e => setTopic(e.target.value)} onKeyDown={e => e.key === 'Enter' && (e.ctrlKey || e.metaKey) && void start()} onPaste={attachments.onPaste} placeholder="e.g. What should the jump feel like? Or: a game about tides, what's the hook?" />
       </Field>
+      <div className="attach-area" ref={attachments.zone}>
+        <Drafts a={attachments} />
+        <AttachButton a={attachments} />
+      </div>
       <Field label="Makers" hint="Each starts the first time it's asked, and keeps what it learnt. Change a maker's model, or run one role on two models for a second take. You can add more in the room.">
         <div className="seats">
           {casts.length > 0 && (
@@ -250,7 +258,7 @@ export function NewRoomDialog({ config, from, onClose, onStart, onCommand }: {
         </button>
         {lenses.some(lensProblem) && <span className="warn-text small">{lenses.map(lensProblem).find(Boolean)}</span>}
         <button className="btn primary" disabled={!topic.trim() || busy || lenses.some(lensProblem)} onClick={() => void start()}>
-          {busy ? 'Opening…' : 'Open the room'}
+          {attachments.busy ? 'Uploading…' : busy ? 'Opening…' : 'Open the room'}
         </button>
       </div>
     </Dialog>

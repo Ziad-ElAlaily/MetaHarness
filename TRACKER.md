@@ -641,8 +641,9 @@ Findings from the run:
   goes in the shared folder on sending, and the message names it, so nothing changes per harness. A
   big image also gets a smaller copy, made in the browser. Tested with scripted agents, and in a
   headless browser at desktop and phone width (the Inbox answer box only by type check). Not yet run
-  on a real harness: whether each one looks at the image when told the path is unconfirmed. A new
-  goal or room can't take files yet: it has no shared folder until it starts.
+  on a real harness: whether each one looks at the image when told the path is unconfirmed. The New
+  goal and New room forms take files too, through a draft the goal adopts as it starts; they reach
+  the lead's brief, not the request, so titles stay clean.
 
 - [x] **Folders and sharing** (DESIGN.md §23, GUIDE.md §8). One-level folders under the Roles and
   Workflows tabs, real folders on disk; workflows can name a whole folder of roles. A folder or item
@@ -670,7 +671,7 @@ Findings from the run:
 ## Resuming work
 
 ```sh
-npm install && npm test        # 218 tests, about half a minute, no model calls
+npm install && npm test        # 221 tests, about half a minute, no model calls
 node src/cli.ts doctor         # what's installed and signed in here
 node src/cli.ts daemon --fake  # try it without spending anything
 ```

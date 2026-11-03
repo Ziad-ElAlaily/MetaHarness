@@ -213,7 +213,9 @@ guidelines), **Behaviour** (rules, settings) and **Machine** (harnesses, tools a
   a room's chat, **Ask**, an answer in the Inbox), click 📎, drop files on the pane, or paste a
   screenshot. On a phone, 📎 offers the camera and your photos. Each file can be up to 100 MB. The
   agent gets the file's path and reads it with its own tools; a big image also gets a smaller copy,
-  so looking at it doesn't bog the agent down. They aren't uploaded until you send.
+  so looking at it doesn't bog the agent down. They aren't uploaded until you send. The **New goal**
+  and **New room** forms take files too, and the lead has them from its first word; it passes them
+  on to whoever on the team needs them.
 - **Rooms:** brainstorms for getting clear and deciding (below).
 - **Ask** (in the left rail, from any page): an assistant for questions about your goals and
   setup. It looks things up in the logs, shared files, costs and config. When you ask for a

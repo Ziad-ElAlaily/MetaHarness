@@ -177,6 +177,7 @@ function Chat({ goal, room, who, files, live, lead, onCard }: { goal: Goal; room
       <div className="chat-topic">
         <span className="label">Room</span> <span className="t meta">{clock(goal.createdAt)}</span>
         <Markdown text={goal.request} />
+        {room.attachments && <Attached goal={goal.id} text={room.attachments.join('\n')} onOpen={files.open}>{said => said}</Attached>}
         {room.from && <div className="muted small">Carried over from {room.from}: see the board.</div>}
       </div>
       {room.messages.map(m => (

@@ -247,7 +247,7 @@ function conversation(events: MhEvent[]): Said[] {
     if (!e.agent) continue;
     if (e.type === 'agent.spawned') {
       parentOf.set(e.agent, e.parent ?? 'human');
-      out.push({ seq: e.seq, ts: e.ts, from: e.parent ?? 'human', to: e.agent, text: String(e.data.brief ?? ''), kind: 'brief' });
+      out.push({ seq: e.seq, ts: e.ts, from: e.parent ?? 'human', to: e.agent, text: shortAttachments(String(e.data.brief ?? '')), kind: 'brief' });
     } else if (e.type === 'message.sent') {
       const id = e.data.id ? String(e.data.id) : undefined;
       out.push({ seq: e.seq, ts: e.ts, from: e.agent, to: String(e.data.to), text: shortAttachments(String(e.data.text ?? '')), kind: 'message', urgent: !!e.data.urgent, queued: !!id && !delivered.has(id) });

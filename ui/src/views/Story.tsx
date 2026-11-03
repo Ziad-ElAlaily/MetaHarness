@@ -154,6 +154,7 @@ function Card({ e, name, onOpenFile }: { e: MhEvent; name: (n?: string) => React
           <More lines={5}>
             <Markdown text={String(d.request ?? '')} />
           </More>
+          {d.attachments && <Attached goal={e.goal} text={(d.attachments as string[]).join('\n')} onOpen={onOpenFile}>{said => said}</Attached>}
         </div>
       );
     case 'agent.spawned':
@@ -170,7 +171,7 @@ function Card({ e, name, onOpenFile }: { e: MhEvent; name: (n?: string) => React
           </div>
           {d.brief && (
             <More lines={2} className="quiet">
-              <Markdown text={String(d.brief)} />
+              <Markdown text={shortAttachments(String(d.brief))} />
             </More>
           )}
         </div>

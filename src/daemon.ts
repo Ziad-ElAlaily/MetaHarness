@@ -1,4 +1,4 @@
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { basename, dirname, extname, isAbsolute, join, normalize, relative, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
@@ -400,6 +400,17 @@ const GIT_ACTOR_MS = 120_000;
 /** Files the human attached to messages, in a shared folder. */
 const UPLOADS = /^(room\/)?uploads\//;
 
+/** Files for a goal or room that's about to start: uploaded to a draft, and the lines that name them. */
+interface StartFiles {
+  draft: string;
+  lines: string[];
+}
+
+const startFilesOf = (v: unknown): StartFiles | undefined => {
+  const a = v as Partial<StartFiles> | undefined;
+  return typeof a?.draft === 'string' && Array.isArray(a.lines) && a.lines.length ? { draft: a.draft, lines: a.lines.map(String) } : undefined;
+};
+
 const MEDIA_TYPES: Record<string, string> = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
   '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8',
@@ -667,8 +678,9 @@ export class Daemon {
    * lead follows (none: it picks one). `leadDef` runs the lead from a role that isn't in the
    * config, and `dir` works in a folder that isn't a project you opened (both for harness tests).
    */
-  startGoal(o: { request: string; project?: string; lead?: string; workflow?: string; playbook?: string; leadDef?: Role; dir?: string; fromRoom?: string; from?: { goal: string; files?: string[] } }): string {
+  startGoal(o: { request: string; project?: string; lead?: string; workflow?: string; playbook?: string; leadDef?: Role; dir?: string; fromRoom?: string; from?: { goal: string; files?: string[] }; attach?: StartFiles }): string {
     const project = this.workPlace(o);
+    this.checkDraft(o.attach);
     const workflow = o.workflow ?? o.playbook;
     // A room's goal continues from the room.
     const from = o.from ?? (o.fromRoom ? { goal: o.fromRoom } : undefined);
@@ -690,6 +702,7 @@ export class Daemon {
     };
     // What it continues from is copied in, so it outlasts that goal being deleted.
     const imported = source ? this.importShared(String(source.data.sharedDir), sharedDir, from!.files ?? (source.data.kind === 'room' ? ['room'] : [])) : [];
+    const attachments = this.adoptDraft(g, o.attach);
     const gs = git.setupGoal(g.dir, id);
     if ('reason' in gs) g.gitNote = gs.reason;
     else {
@@ -706,11 +719,13 @@ export class Daemon {
         branch: g.git?.branch ?? null, base: g.git?.base ?? null, notice: this.goalNotice(g) ?? null,
         ...(o.fromRoom ? { fromRoom: o.fromRoom } : {}),
         ...(from ? { from: { goal: from.goal, files: imported } } : {}),
+        ...(attachments.length ? { attachments } : {}),
       },
     });
     for (const c of g.shared.scan()) this.sharedChanged(g, c);
     const background = !source ? '' : source.data.kind === 'room' ? this.roomBackground(from!.goal, sharedDir) : this.goalBackground(from!.goal, imported);
-    const brief = background ? `${o.request}\n\n${background}` : o.request;
+    // The request stays as you wrote it, for titles and teammates: what's attached is in the lead's brief.
+    const brief = [o.request, attachments.join('\n'), background].filter(Boolean).join('\n\n');
     const r = this.spawnAgent(id, { role: leadRole, roleDef: o.leadDef, brief, parent: 'human', isLead: true, workflow });
     if (!r.ok) {
       g.status = 'ended';
@@ -718,6 +733,7 @@ export class Daemon {
       throw new Error(r.error);
     }
     g.lead = r.name;
+    this.dropDraft(o.attach);
     this.startPolling();
     if (g.git) this.recordDesign(g, g.git, g.git.base, { kind: 'start' });
     return id;
@@ -3648,8 +3664,9 @@ export class Daemon {
    * `from` carries a past room's board (or, with `cards`, the cards branched off it), or a goal's
    * outcome, over.
    */
-  startRoom(o: { topic: string; project?: string; lenses?: Lens[]; from?: string; cards?: string[] }): string {
+  startRoom(o: { topic: string; project?: string; lenses?: Lens[]; from?: string; cards?: string[]; attach?: StartFiles }): string {
     const project = this.workPlace(o);
+    this.checkDraft(o.attach);
     const c = project.config;
     const lenses = (o.lenses ?? DEFAULT_MAKERS.filter(r => this.teamRoles(c).some(x => x.name === r)).map(role => ({ role }))).map(p => this.checkLens(p, c));
     const leadRole = c.roles.get(c.settings.roomLead);
@@ -3666,6 +3683,7 @@ export class Daemon {
     };
     const paths = this.roomPaths(g);
     for (const dir of [paths.media, paths.demos]) mkdirSync(dir, { recursive: true });
+    const attachments = this.adoptDraft(g, o.attach);
     const gs = git.setupGoal(g.dir, id);
     if ('reason' in gs) g.gitNote = gs.reason;
     else {
@@ -3680,6 +3698,7 @@ export class Daemon {
       data: {
         kind: 'room', request: o.topic, lead: leadRole.name, sharedDir, dir: g.dir, branch: g.git?.branch ?? null, base: g.git?.base ?? null,
         from: o.from ?? null, ...(o.cards?.length ? { cards: o.cards } : {}), notice: this.goalNotice(g) ?? null,
+        ...(attachments.length ? { attachments } : {}),
       },
     });
     this.emitLenses(g);
@@ -3699,22 +3718,24 @@ export class Daemon {
     }
     this.canvasChanged(g);
     if (o.from && o.cards?.length) this.markBranch(o.from, o.cards, id);
-    const r = this.spawnAgent(id, { role: leadRole.name, roleDef: leadRole, brief: this.roomOpening(g, seed?.cards.length ?? 0), parent: 'human', isLead: true, name: 'lead' });
+    const r = this.spawnAgent(id, { role: leadRole.name, roleDef: leadRole, brief: this.roomOpening(g, seed?.cards.length ?? 0, attachments), parent: 'human', isLead: true, name: 'lead' });
     if (!r.ok) {
       g.status = 'ended';
       this.emit({ goal: id, type: 'goal.ended', data: { reason: r.error } });
       throw new Error(r.error);
     }
     g.lead = r.name;
+    this.dropDraft(o.attach);
     this.startPolling();
     if (g.git) this.recordDesign(g, g.git, g.git.base, { kind: 'start' });
     return id;
   }
 
   /** What the lead hears first: the topic, and what to do with it. */
-  private roomOpening(g: GoalRec, seeded: number): string {
+  private roomOpening(g: GoalRec, seeded: number, attachments: string[] = []): string {
     return [
       g.request,
+      ...(attachments.length ? ['', ...attachments] : []),
       '',
       seeded
         ? `[Room] The board starts with ${seeded} card${seeded > 1 ? 's' : ''} carried over: read it with \`canvas\` first.`
@@ -4240,6 +4261,10 @@ export class Daemon {
    */
   async upload(goalId: string, name: string, body: Readable): Promise<{ path: string; abs: string; size: number }> {
     if (goalId === ASSISTANT_STREAM) return saveUpload(this.assistantShared(), 'uploads', name, body);
+    if (goalId.startsWith('draft-')) {
+      this.sweepDrafts();
+      return saveUpload(this.draftShared(goalId), 'uploads', name, body);
+    }
     const g = this.goals.get(goalId);
     if (!g) throw new Error(`There's no goal ${goalId} running here to attach a file to.`);
     const saved = await saveUpload(g.sharedDir, g.room ? 'room/uploads' : 'uploads', name, body);
@@ -4250,6 +4275,43 @@ export class Daemon {
 
   private assistantShared(): string {
     return join(this.home, 'assistant', 'shared');
+  }
+
+  /**
+   * Where files wait for a goal or room that hasn't started, so it has no shared folder yet. They
+   * stay until it has started properly: one that fails can be tried again without uploading them twice.
+   */
+  private draftShared(draft: string): string {
+    if (!/^draft-[0-9a-f]{16,64}$/.test(draft)) throw new Error(`${draft} isn't a draft.`);
+    return join(this.home, 'drafts', draft, 'shared');
+  }
+
+  private checkDraft(a?: StartFiles): void {
+    if (a && !existsSync(join(this.draftShared(a.draft), 'uploads'))) throw new Error("The files attached to this are gone. Take them off and attach them again.");
+  }
+
+  /** Brings a draft's files into the goal's shared folder, and returns the lines that name them, now pointing there. */
+  private adoptDraft(g: GoalRec, a?: StartFiles): string[] {
+    if (!a) return [];
+    const from = join(this.draftShared(a.draft), 'uploads');
+    const to = join(g.sharedDir, g.room ? 'room/uploads' : 'uploads');
+    mkdirSync(to, { recursive: true });
+    for (const f of readdirSync(from)) linkSync(join(from, f), join(to, f));
+    return a.lines.map(l => l.replaceAll(`${from}${sep}`, `${to}${sep}`));
+  }
+
+  private dropDraft(a?: StartFiles): void {
+    if (a) rmSync(dirname(this.draftShared(a.draft)), { recursive: true, force: true });
+  }
+
+  /** A draft a day old was given up on: its start failed, and the form was closed. */
+  private sweepDrafts(): void {
+    const dir = join(this.home, 'drafts');
+    if (!existsSync(dir)) return;
+    for (const d of readdirSync(dir)) {
+      const full = join(dir, d);
+      if (Date.now() - statSync(full).mtimeMs > 24 * 3600_000) rmSync(full, { recursive: true, force: true });
+    }
   }
 
   /* ---------------- restart recovery ---------------- */
@@ -4869,7 +4931,7 @@ export class Daemon {
         const request = s('request');
         if (!request) throw new Error('goal.start needs a request.');
         const from = s('from') ? { goal: s('from')!, files: Array.isArray(b.files) ? b.files.map(String) : undefined } : undefined;
-        const goal = this.startGoal({ request, project: s('project'), lead: s('lead'), workflow: s('workflow') ?? s('playbook'), fromRoom: s('fromRoom'), from });
+        const goal = this.startGoal({ request, project: s('project'), lead: s('lead'), workflow: s('workflow') ?? s('playbook'), fromRoom: s('fromRoom'), from, attach: startFilesOf(b.attach) });
         return { goal, notice: this.goalNotice(this.goals.get(goal)!) ?? null };
       }
       case 'room.start': {
@@ -4878,7 +4940,7 @@ export class Daemon {
         // No makers given: the built-in ones.
         const lenses = Array.isArray(b.lenses) ? (b.lenses as Lens[]).filter(p => p && (p.role || p.on)) : undefined;
         const cards = Array.isArray(b.cards) ? b.cards.map(String) : undefined;
-        const room = this.startRoom({ topic, project: s('project'), lenses, from: s('from'), cards });
+        const room = this.startRoom({ topic, project: s('project'), lenses, from: s('from'), cards, attach: startFilesOf(b.attach) });
         return { goal: room, room, notice: this.goalNotice(this.goals.get(room)!) ?? null };
       }
       case 'room.post': {

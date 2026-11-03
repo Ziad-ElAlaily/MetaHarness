@@ -160,3 +160,68 @@ test("a room's files go where a goal started from it carries them, and the assis
     await d.close();
   }
 });
+
+test('a goal starts with files: they land in its shared folder, in the lead\'s brief, and not in its title', async () => {
+  const { d } = team();
+  const { server, upload } = await serve(d);
+  const draft = `draft-${'a'.repeat(24)}`;
+  try {
+    const saved = await (await upload(draft, 'bug shot.png', 'pixels')).json();
+    const line = `[Attached image: ${saved.abs} (6 B)]`;
+    // A start that fails leaves the draft to try again from.
+    await assert.rejects(d.command({ cmd: 'goal.start', request: 'Fix this', lead: 'nobody', attach: { draft, lines: [line] } }), /nobody/);
+    assert.ok(existsSync(saved.abs));
+
+    const { goal } = (await d.command({ cmd: 'goal.start', request: 'Fix this', attach: { draft, lines: [line] } })) as { goal: string };
+    const g = d.goals.get(goal)!;
+    const final = join(g.sharedDir, 'uploads', 'bug-shot.png');
+    assert.equal(readFileSync(final, 'utf8'), 'pixels');
+    assert.equal(g.request, 'Fix this');
+    assert.equal(d.agent(goal, g.lead)!.brief, `Fix this\n\n[Attached image: ${final} (6 B)]`);
+    const started = d.store.since(goal).find(e => e.type === 'goal.started')!;
+    assert.equal(started.data.request, 'Fix this');
+    assert.deepEqual(started.data.attachments, [`[Attached image: ${final} (6 B)]`]);
+    assert.ok(d.store.since(goal).some(e => e.type === 'shared.write' && e.data.path === 'uploads/bug-shot.png' && e.agent === 'human'));
+    assert.equal(existsSync(saved.abs), false, 'the draft is gone once the goal has started');
+    await assert.rejects(d.command({ cmd: 'goal.start', request: 'Again', attach: { draft, lines: [line] } }), /gone/);
+  } finally {
+    server.close();
+    await d.close();
+  }
+});
+
+test('a room opens with files, where a goal started from it carries them', async () => {
+  const { d } = team();
+  const { server, upload } = await serve(d);
+  const draft = `draft-${'b'.repeat(24)}`;
+  try {
+    const saved = await (await upload(draft, 'ref.png', 'r')).json();
+    const room = d.startRoom({ topic: 'The look', attach: { draft, lines: [`[Attached image: ${saved.abs} (1 B)]`] } });
+    const g = d.goals.get(room)!;
+    const final = join(g.sharedDir, 'room', 'uploads', 'ref.png');
+    assert.equal(readFileSync(final, 'utf8'), 'r');
+    assert.equal(g.request, 'The look');
+    assert.ok(d.agent(room, g.lead)!.brief.includes(`[Attached image: ${final} (1 B)]`));
+    assert.ok(d.store.since(room).find(e => e.type === 'goal.started')!.data.attachments);
+  } finally {
+    server.close();
+    await d.close();
+  }
+});
+
+test("a draft's name can't reach outside its folder", async () => {
+  const { d } = team();
+  const { server, upload } = await serve(d);
+  try {
+    for (const bad of ['draft-../../evil', 'draft-', 'draft-zzzzzzzzzzzzzzzzzzzz']) {
+      const r = await upload(bad, 'a.png', 'x');
+      assert.equal(r.status, 400, bad);
+      assert.match((await r.json()).error, /isn't a draft/);
+    }
+    await assert.rejects(d.command({ cmd: 'goal.start', request: 'x', attach: { draft: '../../etc', lines: ['l'] } }), /isn't a draft/);
+    assert.equal(d.goals.size, 0);
+  } finally {
+    server.close();
+    await d.close();
+  }
+});

@@ -319,7 +319,9 @@ export function AgentDetail({ goal, agent, events, manifest, onCommand, onSpawnU
         {tab === 'brief' && (
           <div className="pane-body">
             <div className="kicker">What it was asked to do</div>
-            <Markdown text={agent.brief || '—'} />
+            <Attached goal={goal.id} text={agent.brief || '—'} onOpen={onOpenFile}>
+              {said => <Markdown text={said} />}
+            </Attached>
           </div>
         )}
         {tab === 'setup' && (
