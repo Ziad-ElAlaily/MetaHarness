@@ -404,3 +404,11 @@ test('the human can stop the lead or a maker mid-turn: what it said so far is it
     await d.close();
   }
 });
+
+test('a room has nothing to dismiss: its makers stay for the next question', async () => {
+  const { d } = roomTeam();
+  const room = d.startRoom({ topic: 't', lenses: [{ role: 'scout' }] });
+  const out = await d.hub.call(room, d.goals.get(room)!.lead, 'dismiss', { name: 'all' });
+  assert.match(out, /In a room, makers stay/);
+  await d.close();
+});

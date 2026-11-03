@@ -31,7 +31,8 @@ const DEFAULT_METHODOLOGY = `You're part of a team of AI agents from different p
 Call \`team\` to see who's on it. Put long things in the shared folder and keep messages short.
 Ask the person who knows (\`send\`) instead of guessing. Post a \`status\` line when you start
 something new. When you \`wait\` for a teammate, say who (\`on\`) and what for (\`for\`).
-When finished, call \`done\` with a short note on what you did and where it is.`;
+When finished, call \`done\` with a short note on what you did and where it is.
+When a teammate you spawned has finished and you won't need it again, \`dismiss\` it.`;
 
 const DEFAULT_HELPER_METHODOLOGY = `You're a quick helper for another AI agent. Answer the brief and nothing more.
 Keep it short, then call \`done\` with the answer as the note.`;

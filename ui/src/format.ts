@@ -18,7 +18,7 @@ export function clock(ts: string | number): string {
 }
 
 /** MetaHarness's own tools: their calls already show as status lines, messages and done notes. */
-export const OWN_TOOLS = new Set(['team', 'spawn', 'send', 'wait', 'status', 'done', 'workflow', 'skill']);
+export const OWN_TOOLS = new Set(['team', 'spawn', 'dismiss', 'send', 'wait', 'status', 'done', 'workflow', 'skill']);
 export const isOwnTool = (e: MhEvent) => e.type === 'agent.tool_call' && OWN_TOOLS.has(String(e.data.tool).replace(/^mcp__metaharness__/, ''));
 
 export function ago(ts: string | number): string {
@@ -92,7 +92,9 @@ export function eventText(e: MhEvent): string {
     case 'approval.lead': return `asks ${d.lead} to approve: ${oneLine(d.detail, 140)}`;
     case 'approval.lead_answered': return `${d.allow ? 'allowed' : 'refused'} ${d.to}'s request${d.text ? `: ${oneLine(d.text, 160)}` : ''}`;
     case 'approval.lead_silent': return `${d.lead} didn't answer its request in ${d.minutes} min; it went to you`;
-    case 'message.held': return `asked you while you were away; told to ask ${d.lead} instead: ${oneLine(d.text, 200)}`;
+    case 'message.held':
+      if (d.why === 'finished') return `to ${d.to}, not waking ${(d.held as string[]).join(', ')}, who finished: ${oneLine(d.text, 200)}`;
+      return `asked you while you were away; told to ask ${d.lead} instead: ${oneLine(d.text, 200)}`;
     case 'human.away': return 'you went away';
     case 'human.back': return 'you came back';
     case 'approval.refused': return `refused: ${oneLine(d.detail, 100)} — ${oneLine(d.why, 160)}`;

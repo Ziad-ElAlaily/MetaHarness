@@ -624,6 +624,17 @@ Findings from the run:
   load. Checked by driving headless Chromium with touch on a scripted daemon at 390x844, 320x568,
   844x390 and in dark mode, and against the previous build at 1440 and 1000 wide. Not yet: a real
   phone; the daemon listens on 127.0.0.1 only, so a phone needs a tunnel to reach it.
+- [x] **Finished agents stay asleep, and can be dismissed** (2026-11-03, DESIGN.md §5, §7). `send`
+  to `all` or a role woke every agent that had called `done`, each a cold resume on a large
+  team. Now it reaches those still going, the rest get a note that rides along with whatever
+  wakes them next, and the sender hears who was skipped; several finished agents in a role are
+  refused, naming them. A new `dismiss(name | names | all)` lets a spawner or the lead end
+  finished teammates and those under them. A message to one that's gone reaches the nearest
+  agent above it still going, no longer sitting unread in an ended parent's inbox or returning
+  to its own sender. Fixed along the way: a session stopped by `mh stop` could still report its
+  exit, which logged a second `agent.ended` with a fake session. `test/dismiss.test.ts`, on
+  scripted agents only: not yet run on a real harness, so whether agents actually use `dismiss`
+  unprompted is unknown.
 
 ## Milestone 3: improve
 
@@ -644,7 +655,7 @@ Findings from the run:
 ## Resuming work
 
 ```sh
-npm install && npm test        # 163 tests, about half a minute, no model calls
+npm install && npm test        # 188 tests, about half a minute, no model calls
 node src/cli.ts doctor         # what's installed and signed in here
 node src/cli.ts daemon --fake  # try it without spending anything
 ```

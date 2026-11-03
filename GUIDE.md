@@ -453,7 +453,7 @@ of a command) and deliver the message at once.
 | Control | Effect |
 |---|---|
 | Pause / Resume | It stops after its current step, and messages wait. Resume tells it to carry on |
-| Stop | Ends the agent; whoever spawned it is told |
+| Stop | Ends the agent; whoever spawned it is told, unless it had already reported back |
 | Respawn, Start over | On a crashed agent: starts it again under its name, resuming its session or (Start over) from a handoff. The crashed one stays as `<name>-crashed`. The lead does this for its teammates; you'll mostly need it when the lead crashes |
 | Open in harness | The command to open its session in the harness itself, e.g. `claude --resume …` (pause it first) |
 | + Helper, + Agent | Start an agent yourself; its result comes to you, or to the agent you pick |
@@ -464,7 +464,7 @@ of a command) and deliver the message at once.
 The terminal can do all of this too:
 
 - `mh status`, `mh tail`
-- `mh send impl-1 "…" [--urgent]`
+- `mh send impl-1 "…" [--urgent]`. To `all` or a role, it reaches those still going: finished agents aren't woken, and see it if something wakes them later. To wake one, use its name.
 - `mh approve <id> [note]`, `mh deny <id> [reason]`
 - `mh pause|resume [agent]`, `mh stop <agent>`, `mh end`
 - `mh spawn <role> "<brief>"`, `mh open <agent>`
@@ -557,6 +557,7 @@ Home, or a room's header): what to talk about, and the makers.
     lead doesn't answer within the stall time (`stallMinutes`, 10), come to you.
 
   Each harness keeps its own sandbox on top.
+- **Finished teammates.** An agent that called `done` rests until a message to it by name wakes it, which can cost its whole context again. Messages to `all` or a role don't wake it. A spawner or the lead that won't need it again calls `dismiss`: it ends, with the finished teammates it spawned, and shows as *ended* with who dismissed it. Its files, commits and notes stay, and what it left running stops. It can't come back, so more of that work means a new teammate.
 - **Away.** When you want a goal to finish without you, press **I'm away** in a goal's header
   or on Home (or `mh away`); it's for every goal, not just that one. Nothing waits on you then:
   - approvals go to the gatekeeper whatever the setting, and what it won't settle to the lead;

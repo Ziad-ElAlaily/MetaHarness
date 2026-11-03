@@ -182,13 +182,14 @@ optional harness profiles (§16) and MCP server definitions (§17).
 
 ## 5. Agent tools (MCP)
 
-Eight tools. All of them accept loose input and answer in plain language.
+All of them accept loose input and answer in plain language.
 
 | Tool | What it does |
 |---|---|
 | `team()` | The roster: agents on this goal, their roles, what they're doing; plus roles you can spawn and what they're good at |
 | `spawn(role, brief, quick?, name?, worktree?, from?)` | Start a teammate. `brief` is free text. Returns their name. With `quick: true` it starts a helper, waits, and returns the helper's answer directly (§11). With `worktree: true` (or `from`) it gets its own worktree (§9) |
-| `send(to, text, urgent?, decision?)` | `to` = an agent name, a role, `lead`, `all`, or `human`. To the human with `decision: true`, it asks for an approval (§17) |
+| `send(to, text, urgent?, decision?)` | `to` = an agent name, a role, `lead`, `all`, or `human`. `all` and a role reach those still going, not teammates who have finished (§7). To the human with `decision: true`, it asks for an approval (§17) |
+| `dismiss(name)` | End a finished teammate for good, with the finished teammates it spawned. `name` can be several, or `all` for every finished teammate the caller spawned, leaving out roles woken by events. Only its spawner or the lead can, and only once it has finished and nothing under it still works: the reply says who it refused and why. Its files, commits and notes stay, and it can't be respawned. Not in a room, whose makers stay for the next question |
 | `wait(timeout?, on?, for?)` | Pause until a message arrives or one of your spawned agents finishes, then return what happened. `on` and `for` say who you expect something from and what (`for` alone: something of your own, like a build); a wait that would close a loop is refused (§8) |
 | `status(text)` | A one-line progress update, shown in the UI and in `team()` |
 | `done(note?)` | "I'm finished." The note goes to whoever spawned you. Your session stays resumable for follow-ups. Held while teammates you spawned still work (not quick helpers or woken roles): the reply names them and the agent decides — wait, message them, or carry on |
@@ -270,7 +271,9 @@ agent's harness supports:
 | Agent's turn has ended (idle) | Sent as a new user turn (session resumed) |
 | Harness has neither | The methodology asks agents to call `wait(0)` between steps; the unread notice catches the rest |
 | You mark a message urgent | **Paused between steps** at once: it waits for the running tool to finish (up to 60 s, then interrupts anyway), so a command or file write is never cut in half. Without a native interrupt, the session is killed and resumed from its ID with the message |
-| Agent is done | Its session is resumed for the follow-up. If that's impossible, the message goes to its spawner with a note |
+| Agent is done, message to it by name | Its session is resumed for the follow-up. If that's impossible, the message goes to its spawner with a note |
+| Agent is done, message to `all` or its role | **Not woken.** The note rides along with whatever wakes it next, and the sender is told who was skipped. A role with several agents that have all finished is refused, naming them; a role with just one wakes it. Notes aren't kept across a daemon restart |
+| Agent was dismissed or has ended | Goes to the nearest agent above it still going, or the human. A sender who is that agent is told it can't take messages, instead of getting its own message back |
 
 Mid-turn delivery is the standard: every harness that can be interrupted or resumed gets
 messages during its turn, by one of the paths above. A pause only ever happens between steps:
@@ -280,6 +283,8 @@ mark an interrupted tool call as failed.) The delays are a `PausePolicy`: 20 s g
 harness to pick the message up itself, 5 s after each tool for one that pulls messages through a
 hook, 60 s at most waiting for a tool. Only a harness with neither interrupt nor resume waits for
 the end of the turn.
+
+Finished agents are left asleep because of what waking them costs. By then their cache has usually gone, so one `all` to a team of thirty pays to reread thirty contexts, and agents with nothing left to do tend to start something. Seen in use on large workflows. It's a rule about groups: naming an agent still wakes it, because then the sender means that agent. Waking a finished agent is what `dismiss` rules out for good, for a spawner who knows it won't be needed. The note on a finished teammate's result reminds its spawner of that.
 
 Where a hook is used, it's a few lines of glue that call the daemon. It only adds something when
 there are new messages or file changes, so an agent nobody is messaging sees nothing extra.

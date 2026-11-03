@@ -18,6 +18,7 @@ const SCHEMAS: Record<(typeof TOOL_NAMES)[number], z.ZodType> = {
   team: z.looseObject({}),
   spawn: z.looseObject({ role: z.string().optional(), brief: z.string().optional(), quick: flexible.optional(), name: z.string().optional(), worktree: flexible.optional(), from: z.string().optional(), patch: flexible.optional() }),
   respawn: z.looseObject({ name: z.string().optional(), fresh: flexible.optional(), on: z.string().optional(), note: z.string().optional() }),
+  dismiss: z.looseObject({ name: z.union([z.string(), z.array(z.string())]).optional() }),
   send: z.looseObject({ to: z.string().optional(), text: z.string().optional(), urgent: flexible.optional(), decision: flexible.optional() }),
   wait: z.looseObject({ timeout: flexible.optional(), on: z.string().optional(), for: z.string().optional() }),
   status: z.looseObject({ text: z.string().optional() }),
@@ -43,6 +44,7 @@ function buildServer(d: Daemon, goal: string, agent: string): McpServer {
   const room = !!d.goals.get(goal)?.room;
   for (const name of TOOL_NAMES) {
     if (name === 'canvas' && !room) continue;
+    if (name === 'dismiss' && room) continue;
     register(name, { description: describe(name), inputSchema: SCHEMAS[name] }, async args => ({
       content: [{ type: 'text', text: await d.hub.call(goal, agent, name, args) }],
     }));

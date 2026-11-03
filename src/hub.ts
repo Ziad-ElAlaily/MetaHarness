@@ -3,8 +3,8 @@ import { skillList, skillPart, skillSummary } from './skills.ts';
 import { parseCanvasOps } from './rooms.ts';
 import type { AgentRec, Daemon, InboxEntry } from './daemon.ts';
 
-/** `canvas` is published only to agents in a brainstorm room. */
-export const TOOL_NAMES = ['team', 'spawn', 'respawn', 'send', 'wait', 'status', 'done', 'workflow', 'skill', 'canvas'] as const;
+/** `canvas` is published only to agents in a brainstorm room, and `dismiss` only outside one. */
+export const TOOL_NAMES = ['team', 'spawn', 'respawn', 'dismiss', 'send', 'wait', 'status', 'done', 'workflow', 'skill', 'canvas'] as const;
 
 /** Descriptions the MCP layer will publish. Written for the agents that read them. */
 export const TOOL_DOCS: Record<(typeof TOOL_NAMES)[number], { description: string; params: Record<string, string> }> = {
@@ -29,8 +29,14 @@ export const TOOL_DOCS: Record<(typeof TOOL_NAMES)[number], { description: strin
       note: 'Optional: what to tell it, e.g. messages it missed or what changed',
     },
   },
+  dismiss: {
+    description: "End a finished teammate you won't need again, along with the finished teammates it spawned. Nobody can wake it after that, which saves paying for its whole context if a message reaches it by accident. Its files, commits and notes stay; anything it left running stops. It can't come back: for more of that work, spawn someone new and point them at it.",
+    params: {
+      name: "The teammate, or several separated by commas, or all for every finished teammate you spawned. Only a teammate's spawner or the lead can dismiss it",
+    },
+  },
   send: {
-    description: 'Send a short message to a teammate (by name or role), to lead, to all, or to human.',
+    description: "Send a short message to a teammate (by name or role), to lead, to all, or to human. To all or a role, it reaches those still going: it doesn't wake teammates who have finished, who see it if woken later. To wake a finished one, use its name.",
     params: {
       to: 'Recipient',
       text: 'The message',
@@ -173,6 +179,14 @@ export class Hub {
         const fresh = truthy(pick(a, 'fresh', 'new', 'restart'));
         const r = d.respawnAgent(rec.goal, name, { by: rec.name, fresh, on: str(pick(a, 'on', 'harness', 'model', 'route')), note: str(pick(a, 'note', 'text', 'message', 'brief')) });
         return r.ok ? r.text : r.error;
+      }
+
+      case 'dismiss': {
+        if (d.goals.get(rec.goal)?.room) return "In a room, makers stay for the next question, so there's nothing to dismiss.";
+        const who = pick(a, 'name', 'names', 'agent', 'agents', 'who', 'teammate', 'teammates', 'text');
+        const wanted = (Array.isArray(who) ? who.map(String) : String(who ?? '').split(/[,\s]+/)).map(w => w.trim()).filter(Boolean);
+        if (!wanted.length) return 'dismiss needs a name: a finished teammate, several separated by commas, or all.';
+        return d.dismissAgents(rec.goal, rec.name, wanted);
       }
 
       case 'send': {

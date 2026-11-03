@@ -86,6 +86,7 @@ export function eventLine(e: MhEvent): string {
     case 'approval.lead_silent':
       return `${t}  ${who}${d.lead} didn't answer its request in ${d.minutes} min; it goes to you`;
     case 'message.held':
+      if (d.why === 'finished') return `${t}  ${who}to ${d.to}, not waking ${(d.held as string[]).join(', ')}, who finished: ${oneLine(d.text, 100)}`;
       return `${t}  ${who}asked you while you're away; told to ask ${d.lead}: ${oneLine(d.text, 100)}`;
     case 'human.away':
       return `${t}  ${'you'.padEnd(15)}are away`;

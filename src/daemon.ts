@@ -1654,6 +1654,66 @@ export class Daemon {
     return all.filter(a => a.parent === rec.name && working(a));
   }
 
+  /**
+   * Finished for now: it reported back (or stopped without calling done), no turn is running and
+   * nothing is on its way to it. A role woken by events rests the same way between them. Waking
+   * one can cost its whole context again, so only a message to it by name does (design §7).
+   */
+  private settled(a: AgentRec): boolean {
+    if (FINISHED.includes(a.state) || a.session?.busy() || a.inbox.length) return false;
+    return a.doneNote !== undefined || (a.state === 'idle' && !this.workingChildren(a).length);
+  }
+
+  /**
+   * Ends finished teammates for good, with the finished teammates they spawned, for someone who
+   * won't need them again: their spawner or the lead (design §5). `all` means every finished
+   * teammate the caller spawned, leaving out roles woken by events, which never finish.
+   */
+  dismissAgents(goalId: string, by: string, wanted: string[]): string {
+    const g = this.goals.get(goalId)!;
+    const caller = g.agents.get(by);
+    const team = [...g.agents.values()];
+    const under = (a: AgentRec): AgentRec[] =>
+      team.filter(c => c.parent === a.name && !FINISHED.includes(c.state) && !c.role.wake?.length).flatMap(c => [c, ...under(c)]);
+    const dismissed: string[] = [];
+    const also: string[] = [];
+    const refused: string[] = [];
+    const dismiss = (t: AgentRec): void => {
+      const below = under(t);
+      const working = below.filter(c => !this.settled(c)).map(c => c.name);
+      if (working.length) return void refused.push(`${t.name}: ${working.join(', ')}, which it spawned, ${working.length > 1 ? 'are' : 'is'} still at work.`);
+      for (const a of [t, ...below]) this.endAgent(a, `dismissed by ${by}, its work finished`);
+      dismissed.push(t.name);
+      also.push(...below.map(c => c.name));
+      const spawner = g.agents.get(t.parent);
+      if (spawner && spawner !== caller && !FINISHED.includes(spawner.state)) spawner.ruleNotes.push(`${by} dismissed ${t.name}, which you spawned.`);
+    };
+    const open = new Set<AgentRec>();
+    for (const w of wanted) {
+      if (/^(all|everyone)$/i.test(w)) {
+        for (const c of team) if (c.parent === by && !c.role.wake?.length && this.settled(c)) open.add(c);
+        continue;
+      }
+      const res = resolveName(w, team.map(a => a.name));
+      const t = res.match ? g.agents.get(res.match) : undefined;
+      if (!t) refused.push(`${w}: there's nobody by that name.`);
+      else if (t === caller) refused.push(`${w}: that's you. Call done when you've finished.`);
+      else if (FINISHED.includes(t.state)) refused.push(`${t.name}: it has already ${t.state}.`);
+      else if (!caller?.isLead && t.parent !== by) refused.push(`${t.name}: only ${t.parent} (who spawned it) or the lead can dismiss it.`);
+      else if (!this.settled(t)) refused.push(`${t.name}: it hasn't finished (${t.state}). Wait for its result, or tell it to wrap up.`);
+      else open.add(t);
+    }
+    for (const t of open) if (!FINISHED.includes(t.state)) dismiss(t);
+    const out: string[] = [];
+    if (dismissed.length) {
+      out.push(`Dismissed ${dismissed.join(', ')}${also.length ? `, and ${also.join(', ')}, which ${dismissed.length > 1 ? 'they' : 'it'} spawned` : ''}. Files, commits and notes stay; anything left running stopped. If you need more of that work, spawn someone new and point them at it.`);
+    } else if (!refused.length) {
+      out.push("Nobody to dismiss: no teammate you spawned has finished.");
+    }
+    if (refused.length) out.push(`Not dismissed:\n${refused.map(r => `- ${r}`).join('\n')}`);
+    return out.join('\n\n');
+  }
+
   /** The answer to a done called while teammates it spawned still work: it hears who, and decides what's next. */
   doneHeld(rec: AgentRec, working: AgentRec[]): string {
     this.emit({ goal: rec.goal, agent: rec.name, type: 'agent.done_held', data: { working: working.map(a => a.name) } });
@@ -1703,7 +1763,8 @@ export class Daemon {
     }
     const parent = g.agents.get(rec.parent);
     if (!parent) return;
-    this.enqueue(parent, { id: randomUUID(), kind: 'done', from: rec.name, text: note, urgent: false, ts: new Date().toISOString() });
+    const hint = how === 'done' || how === 'idle' ? `\n(If you won't need ${rec.name} again, dismiss it.)` : '';
+    this.enqueue(parent, { id: randomUUID(), kind: 'done', from: rec.name, text: note + hint, urgent: false, ts: new Date().toISOString() });
   }
 
   /**
@@ -2489,10 +2550,15 @@ export class Daemon {
     const r = this.resolveRecipients(g, from, to);
     if ('error' in r) return r.error;
     const lines: string[] = [];
+    const sent: string[] = [];
     for (let name of r.names) {
       let rec = g.agents.get(name)!;
       if (FINISHED.includes(rec.state)) {
-        const fallback = rec.parent;
+        const fallback = this.nearestLive(g, rec);
+        if (fallback === from) {
+          lines.push(`${name} has ${rec.state}, so it can't take messages. For more of its work, spawn someone new and point them at it.`);
+          continue;
+        }
         lines.push(`${name} has ${rec.state}, so the message went to ${fallback === 'human' ? 'the human' : fallback} instead.`);
         if (fallback === 'human') {
           this.emit({ goal: goalId, agent: from, type: 'message.sent', data: { to: 'human', text, urgent } });
@@ -2501,6 +2567,8 @@ export class Daemon {
         }
         name = fallback;
         rec = g.agents.get(name)!;
+      } else {
+        sent.push(name);
       }
       const entry: InboxEntry = { id: randomUUID(), kind: 'message', from, text, urgent, ts: new Date().toISOString() };
       this.emit({ goal: goalId, agent: from, type: 'message.sent', data: { id: entry.id, to: name, text, urgent } });
@@ -2512,33 +2580,74 @@ export class Daemon {
       }
       this.enqueue(rec, entry);
     }
-    const sentTo = r.names.join(', ');
-    return [r.note, lines.join(' '), `Sent to ${sentTo}.`].filter(Boolean).join(' ');
+    const held = r.held ?? [];
+    if (held.length) {
+      const by = from === 'human' ? 'the human' : from;
+      for (const name of held) g.agents.get(name)!.ruleNotes.push(`While you were finished, ${by} sent the team: ${text}`);
+      this.emit({ goal: goalId, agent: from, type: 'message.held', data: { to, text, why: 'finished', held } });
+      const one = held.length === 1;
+      lines.push(`${held.join(', ')} ${one ? 'has' : 'have'} finished, so this didn't wake ${one ? 'it' : 'them'}: ${one ? 'it' : 'they'}'ll see it if woken later. To wake one, send to it by name.`);
+    }
+    return [r.note, lines.join(' '), sent.length ? `Sent to ${sent.join(', ')}.` : ''].filter(Boolean).join(' ');
   }
 
-  private resolveRecipients(g: GoalRec, from: string, to: string): { names: string[]; note?: string } | { error: string } {
+  /** Who stands in for an agent that has gone: the nearest one above it still going, or the human. */
+  private nearestLive(g: GoalRec, rec: AgentRec): string {
+    let up = rec.parent;
+    while (up !== 'human') {
+      const p = g.agents.get(up);
+      if (!p) return 'human';
+      if (!FINISHED.includes(p.state)) break;
+      up = p.parent;
+    }
+    return up;
+  }
+
+  /**
+   * Who a message to `to` reaches. `held`: those it's meant for too, but who have finished, so it
+   * waits for whatever wakes them next instead of waking them (design §7).
+   */
+  private resolveRecipients(g: GoalRec, from: string, to: string): { names: string[]; held?: string[]; note?: string } | { error: string } {
     const live = [...g.agents.values()].filter(a => a.name !== from);
     const t = to.trim().toLowerCase();
     if (t === 'all' || t === 'everyone') {
-      const names = live.filter(a => !FINISHED.includes(a.state) && !a.quick).map(a => a.name);
-      return names.length ? { names } : { error: 'Nobody else is on the team yet.' };
+      const team = live.filter(a => !FINISHED.includes(a.state) && !a.quick);
+      return team.length ? this.splitSettled(team) : { error: 'Nobody else is on the team yet.' };
     }
     if (t === 'lead') return g.lead && g.lead !== from ? { names: [g.lead] } : { error: "You're the lead." };
     const agentNames = live.map(a => a.name);
     const exact = agentNames.find(n => n.toLowerCase() === t);
     if (exact) return { names: [exact] };
-    const byRole = live.filter(a => a.role.name.toLowerCase() === t).map(a => a.name);
-    if (byRole.length) return { names: byRole };
+    const byRole = live.filter(a => a.role.name.toLowerCase() === t);
+    if (byRole.length) return this.toRole(byRole);
     // "impl" prefixes both the agent implementer-1 and its role; fine as long as it means one agent.
     const prefixed = live.filter(a => a.name.toLowerCase().startsWith(t) || a.role.name.toLowerCase().startsWith(t));
     if (t && prefixed.length === 1) return { names: [prefixed[0].name], note: `(Took "${to}" to mean ${prefixed[0].name}.)` };
     const roleNames = [...new Set(live.map(a => a.role.name))];
     const res = resolveName(to, [...agentNames, ...roleNames]);
     if (res.match) {
-      const names = agentNames.includes(res.match) ? [res.match] : live.filter(a => a.role.name === res.match).map(a => a.name);
-      return { names, note: `(Took "${to}" to mean ${res.match}.)` };
+      const note = `(Took "${to}" to mean ${res.match}.)`;
+      if (agentNames.includes(res.match)) return { names: [res.match], note };
+      const r = this.toRole(live.filter(a => a.role.name === res.match));
+      return 'error' in r ? r : { ...r, note };
     }
     return { error: `There's nobody called "${to}". Teammates: ${agentNames.join(', ') || 'none yet'}. You can also send to lead, all or human.` };
+  }
+
+  private splitSettled(team: AgentRec[]): { names: string[]; held: string[] } {
+    const held = team.filter(a => this.settled(a));
+    return { names: team.filter(a => !held.includes(a)).map(a => a.name), held: held.map(a => a.name) };
+  }
+
+  /** A message to a role reaches its agents still going. Waking one that finished takes its name, unless it's the only one. */
+  private toRole(role: AgentRec[]): { names: string[]; held: string[] } | { error: string } {
+    if (role.length === 1) return { names: [role[0].name], held: [] };
+    const open = role.filter(a => !FINISHED.includes(a.state));
+    const all = role.map(a => a.name).join(', ');
+    if (!open.length) return { error: `Every ${role[0].role.name} has ended or crashed: ${all}.` };
+    if (open.length === 1) return { names: [open[0].name], held: [] };
+    const r = this.splitSettled(open);
+    return r.names.length ? r : { error: `Every ${role[0].role.name} has finished: ${all}. To wake one, send to it by name.` };
   }
 
   private toHuman(g: GoalRec, agent: string, kind: HumanInboxItem['kind'], text: string, onCreate?: (item: HumanInboxItem) => void, note?: string): HumanInboxItem {
@@ -3240,7 +3349,7 @@ export class Daemon {
     if (on) {
       const r = /^(human|you|user)$/i.test(on) ? { names: ['human'] } : this.resolveRecipients(g, rec.name, on);
       if ('error' in r) return `Not waiting yet. ${r.error}`;
-      rec.waitOn = { who: r.names, ...(what ? { what } : {}) };
+      rec.waitOn = { who: [...r.names, ...('held' in r ? (r.held ?? []) : [])], ...(what ? { what } : {}) };
     } else if (what) {
       rec.waitOn = { who: [], what };
     }
@@ -3394,17 +3503,22 @@ export class Daemon {
     const rec = this.agent(goalId, name);
     if (!rec) return `There's no agent called ${name}.`;
     if (FINISHED.includes(rec.state)) return `${name} has already ${rec.state}.`;
-    void rec.session?.stop();
-    // Whatever the stopped session still says is no longer news.
+    this.endAgent(rec, `stopped by ${by}`);
+    if (rec.doneNote === undefined) this.finish(rec, `${name} was stopped by ${by}.`, 'ended');
+    return `Stopped ${name}.`;
+  }
+
+  /** Stops an agent's session for good, what it left running included. Telling anyone is up to the caller. */
+  private endAgent(rec: AgentRec, reason: string): void {
+    // Whatever the stopped session still says is no longer news, its exit included.
     rec.gen++;
+    void rec.session?.stop();
     clearTimeout(rec.limitTimer);
     this.endPause(rec);
     this.clearRefresh(rec);
     this.endStraysLater(rec);
     this.setState(rec, 'ended');
-    this.emit({ goal: goalId, agent: name, type: 'agent.ended', data: { reason: `stopped by ${by}` } });
-    if (rec.doneNote === undefined) this.finish(rec, `${name} was stopped by ${by}.`, 'ended');
-    return `Stopped ${name}.`;
+    this.emit({ goal: rec.goal, agent: rec.name, type: 'agent.ended', data: { reason } });
   }
 
   /**
