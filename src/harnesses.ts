@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { endTree, launch, spawnTree } from './procs.ts';
 import { accessSync, constants, existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, delimiter, extname, join } from 'node:path';
@@ -303,18 +303,40 @@ export function loadProfiles(dirs: string[]): Map<string, HarnessProfile> {
  * Where a binary is on PATH, if it's there. On Windows a command is `name` plus one of PATHEXT
  * (claude.exe, codex.cmd), and a file with no extension (a shell script for Git Bash) can't run.
  */
-export function findBin(bin: string, path = process.env.PATH ?? '', windows = process.platform === 'win32'): string | undefined {
+/**
+ * Where `bin` runs from. On Windows a process's PATH is a copy taken when its terminal started, so
+ * a CLI installed since (its installer adds its folder to the user's PATH) isn't on it; a miss there
+ * also looks in the PATH the registry holds now (`savedPath`).
+ */
+export function findBin(bin: string, path = process.env.PATH ?? '', windows = process.platform === 'win32', savedPath: () => string = windows ? windowsSavedPath : () => ''): string | undefined {
   const names = windows ? [...(extname(bin) ? [bin] : []), ...(process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map(e => bin + e.toLowerCase())] : [bin];
-  const dirs = /[\\/]/.test(bin) ? [''] : path.split(delimiter).filter(Boolean);
-  const candidates = dirs.flatMap(dir => names.map(n => (dir ? join(dir, n) : n)));
-  for (const c of candidates) {
-    try {
-      accessSync(c, constants.X_OK);
-      return c;
-    } catch {
-      /* not here */
+  const look = (dirs: string[]) => {
+    for (const c of dirs.flatMap(dir => names.map(n => (dir ? join(dir, n) : n)))) {
+      try {
+        accessSync(c, constants.X_OK);
+        return c;
+      } catch {
+        /* not here */
+      }
     }
-  }
+  };
+  if (/[\\/]/.test(bin)) return look(['']);
+  const dirs = path.split(delimiter).filter(Boolean);
+  return look(dirs) ?? look(savedPath().split(delimiter).filter(d => d && !dirs.includes(d)));
+}
+
+/** The user's and the machine's PATH as the registry holds them now, %VARIABLES% expanded. */
+export function windowsSavedPath(): string {
+  const read = (key: string) => {
+    try {
+      const out = execFileSync('reg', ['query', key, '/v', 'Path'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+      const m = /^\s*Path\s+REG_(?:EXPAND_)?SZ\s+(.*)$/im.exec(out);
+      return m ? m[1].trim().replace(/%([^%]+)%/g, (s, v: string) => process.env[v] ?? s) : '';
+    } catch {
+      return '';
+    }
+  };
+  return [read('HKCU\\Environment'), read('HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment')].filter(Boolean).join(delimiter);
 }
 
 export interface HarnessReport {

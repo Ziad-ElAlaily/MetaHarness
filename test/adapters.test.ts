@@ -141,6 +141,14 @@ test('on Windows a binary is found by its PATHEXT extension, not as a bare scrip
   assert.equal(findBin('tool.exe', dir, true), join(dir, 'tool.exe'));
 });
 
+test("on Windows a CLI installed after the terminal started is found on the registry's PATH", () => {
+  const dir = mkdtempSync(join(tmpdir(), 'mh-bin-'));
+  writeFileSync(join(dir, 'agy.exe'), '');
+  assert.equal(findBin('agy', '', true, () => dir), join(dir, 'agy.exe'));
+  assert.equal(findBin('agy', '', false, () => dir), undefined, 'not elsewhere');
+  assert.equal(findBin('missing', '', true, () => dir), undefined);
+});
+
 test('a .cmd shim runs through cmd.exe with its arguments intact', { skip: process.platform !== 'win32' }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'mh bin '));
   const shim = join(dir, 'echoargs.cmd');
