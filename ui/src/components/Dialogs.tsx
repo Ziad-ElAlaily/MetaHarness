@@ -54,11 +54,28 @@ export function NewGoalForm({ config, onStart, onCancel, initialWorkflow = '', i
         <Field label="Workflow" hint={wf ? `${wf.goodAt || 'No description.'}${wf.roles.length ? ` Roles: ${wf.roles.join(', ')}.` : ''}` : 'The lead reads the workflows and picks one.'}>
           <select value={workflow} onChange={e => setWorkflow(e.target.value)}>
             <option value="">Let the lead choose</option>
-            {config?.workflows.map(w => (
-              <option key={w.name} value={w.name}>
-                {w.name}
-              </option>
-            ))}
+            {(() => {
+              // Grouped by folder when there are any.
+              const all = config?.workflows ?? [];
+              const option = (name: string) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              );
+              const folders = [...new Set(all.map(w => w.folder).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+              const rest = all.filter(w => !w.folder).map(w => w.name);
+              if (!folders.length) return rest.map(option);
+              return (
+                <>
+                  {folders.map(f => (
+                    <optgroup key={f} label={f}>
+                      {all.filter(w => w.folder === f).map(w => option(w.name))}
+                    </optgroup>
+                  ))}
+                  {rest.length > 0 && <optgroup label="Other">{rest.map(option)}</optgroup>}
+                </>
+              );
+            })()}
           </select>
         </Field>
       </div>

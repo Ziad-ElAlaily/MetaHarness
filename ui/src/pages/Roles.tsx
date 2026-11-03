@@ -3,6 +3,8 @@ import { api } from '../api.ts';
 import { modelLabel } from '../format.ts';
 import type { ConfigView, RoleDef, Scope } from '../types.ts';
 import { ChipList, Field, Toggle, useConfirm } from '../components/common.tsx';
+import { ExportButton, ImportButton } from '../components/Sharing.tsx';
+import { draggable, FolderField, FolderTree } from '../components/Folders.tsx';
 import { EditorFooter, keyOf, ListItem, ScopePicker, Section, SetupLayout, useDraft, useLeaveGuard, type SetupProps } from './setup.tsx';
 
 const blank = (config?: ConfigView): RoleDef => ({
@@ -17,6 +19,7 @@ const blank = (config?: ConfigView): RoleDef => ({
   instructions: '',
   helper: false,
   worktree: false,
+  folder: '',
   workflow: '',
   mcp: [],
   skills: [],
@@ -44,11 +47,12 @@ export function Roles({ config, selected, onSelect, onSave, onCommand }: SetupPr
   const [saving, setSaving] = useState(false);
   const go = async (key?: string) => (await leave()) && onSelect(key);
 
-  const team = roles.filter(r => !r.helper);
-  const helpers = roles.filter(r => r.helper);
+  const loose = roles.filter(r => !r.folder);
+  const team = loose.filter(r => !r.helper);
+  const helpers = loose.filter(r => r.helper);
   const item = (r: RoleDef) => (
+    <div key={keyOf(r)} {...draggable('role', r.name, r.scope)}>
     <ListItem
-      key={keyOf(r)}
       on={!isNew && current ? keyOf(current) === keyOf(r) : false}
       title={r.name}
       scope={r.scope}
@@ -62,6 +66,7 @@ export function Roles({ config, selected, onSelect, onSave, onCommand }: SetupPr
         </>
       }
     />
+    </div>
   );
 
   const save = async () => {
@@ -83,13 +88,17 @@ export function Roles({ config, selected, onSelect, onSave, onCommand }: SetupPr
         </>
       }
       action={
-        <button className="btn primary" onClick={() => void go('new')}>
-          + New role
-        </button>
+        <span className="page-actions">
+          <ImportButton config={config} onSave={onSave} onCommand={onCommand} />
+          <button className="btn primary" onClick={() => void go('new')}>
+            + New role
+          </button>
+        </span>
       }
       list={
         <>
-          <div className="list-group">Team roles</div>
+          <FolderTree kind="role" config={config} items={roles} render={item} open={selected ? current?.folder : undefined} onSave={onSave} onCommand={onCommand} guard={leave} />
+          {team.length > 0 && <div className="list-group">Team roles</div>}
           {team.map(item)}
           {helpers.length > 0 && <div className="list-group">Quick helpers</div>}
           {helpers.map(item)}
@@ -108,6 +117,7 @@ export function Roles({ config, selected, onSelect, onSave, onCommand }: SetupPr
             isNew={!!isNew}
             original={isNew ? undefined : current}
             onCommand={onCommand}
+            exportButton={!isNew && current && <ExportButton kind="role" name={current.name} scope={current.scope} config={config} onCommand={onCommand} />}
             footer={
               <EditorFooter
                 dirty={dirty}
@@ -179,7 +189,7 @@ function useModelLists(config?: ConfigView) {
   return { lists, load, modelsOf };
 }
 
-function RoleForm({ config, draft, set, isNew, original, footer }: { config?: ConfigView; draft: RoleDef; set: <K extends keyof RoleDef>(k: K, v: RoleDef[K]) => void; isNew: boolean; original?: RoleDef; onCommand: SetupProps['onCommand']; footer: React.ReactNode }) {
+function RoleForm({ config, draft, set, isNew, original, footer, exportButton }: { config?: ConfigView; draft: RoleDef; set: <K extends keyof RoleDef>(k: K, v: RoleDef[K]) => void; isNew: boolean; original?: RoleDef; onCommand: SetupProps['onCommand']; footer: React.ReactNode; exportButton?: React.ReactNode }) {
   const harnesses = config?.harnesses ?? [];
   const h = harnesses.find(x => x.id === draft.harness);
   const { lists, load, modelsOf } = useModelLists(config);
@@ -209,6 +219,7 @@ function RoleForm({ config, draft, set, isNew, original, footer }: { config?: Co
       <div className="editor-scroll">
         <div className="editor-title">
           <h2>{isNew ? 'New role' : draft.name || 'Role'}</h2>
+          {exportButton}
           {original?.overrides && <span className="hint">A {original.overrides} role with this name exists; this one is used here.</span>}
         </div>
         {job && (
@@ -226,6 +237,8 @@ function RoleForm({ config, draft, set, isNew, original, footer }: { config?: Co
               <ScopePicker config={config} value={draft.scope === 'built-in' ? 'repo' : draft.scope} onChange={(s: Scope) => set('scope', s)} />
             </Field>
           </div>
+          <FolderField kind="role" config={config} value={draft.folder} onChange={v => set('folder', v)} />
+          {original?.alsoAt && <div className="hint warn-text">Another file has this name and is ignored: {original.alsoAt.join(', ')}.</div>}
           {!job && (
             <Field label="Good at" hint="One line. Leads read it when they choose whom to start.">
               <textarea rows={2} value={draft.goodAt} onChange={e => set('goodAt', e.target.value.replace(/\n/g, ' '))} placeholder="e.g. writing focused tests for a change and finding edge cases" />

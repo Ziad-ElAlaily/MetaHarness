@@ -3,6 +3,7 @@ import type { ConfigView, McpDef, Scope } from '../types.ts';
 import { Field, useConfirm } from '../components/common.tsx';
 import { EditorFooter, keyOf, ListItem, ScopePicker, Section, SetupLayout, useDraft, useLeaveGuard, type SetupProps } from './setup.tsx';
 import { SkillDetail, SkillItem, skillKey } from './Skills.tsx';
+import { ExportButton, ImportButton } from '../components/Sharing.tsx';
 
 /** A server as the form edits it: lists and maps as lines of text. */
 interface Draft {
@@ -53,7 +54,7 @@ function toDef(d: Draft): McpDef {
  * What roles carry besides MetaHarness's own tools: MCP servers they name under Tools (mcp.json in
  * each config folder), and skills they name under Skills (read-only here).
  */
-export function Tools({ config, selected, onSelect, onSave }: SetupProps) {
+export function Tools({ config, selected, onSelect, onSave, onCommand }: SetupProps) {
   const servers = useMemo(() => config?.mcp ?? [], [config]);
   const skills = config?.skills ?? [];
   const isNew = selected === 'new';
@@ -88,9 +89,12 @@ export function Tools({ config, selected, onSelect, onSave }: SetupProps) {
         </>
       }
       action={
-        <button className="btn primary" onClick={() => void go('new')}>
-          + New server
-        </button>
+        <span className="page-actions">
+          <ImportButton config={config} onSave={onSave} onCommand={onCommand} />
+          <button className="btn primary" onClick={() => void go('new')}>
+            + New server
+          </button>
+        </span>
       }
       list={
         <>
@@ -115,7 +119,7 @@ export function Tools({ config, selected, onSelect, onSave }: SetupProps) {
       }
       editor={
         skill ? (
-          <SkillDetail skill={skill} scopes={config?.scopes ?? []} onSave={onSave} />
+          <SkillDetail skill={skill} scopes={config?.scopes ?? []} onSave={onSave} exportButton={<ExportButton kind="skill" name={skill.name} scope={skill.source} config={config} onCommand={onCommand} />} />
         ) : !current && !isNew ? (
           <div className="empty">Pick a server, or add one.</div>
         ) : (
@@ -123,6 +127,7 @@ export function Tools({ config, selected, onSelect, onSave }: SetupProps) {
             <div className="editor-scroll">
               <div className="editor-title">
                 <h2>{isNew ? 'New server' : draft.name}</h2>
+                {!isNew && current && <ExportButton kind="mcp" name={current.name} scope={current.scope} config={config} onCommand={onCommand} />}
               </div>
               <Section title="Server">
                 <div className="grid-2">

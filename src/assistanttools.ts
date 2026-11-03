@@ -122,14 +122,14 @@ export function buildAssistantServer(d: Daemon): McpServer {
     };
   });
 
-  tool('config', 'A project\'s setup (name it with project: its id or folder; without one, your personal setup alone): roles (harness, model, backups, approvals), workflows, rules (notes agents get at moments: start, path, new-file, commit, done), skills (guides with files agents read through their skill tool; the skills: line of a role names those it carries, and a skill no role names goes to every role), settings (approvals, prices, cache), the harnesses on this machine and what they can do, and accounts near their limits.', { project: opt }, a => {
+  tool('config', 'A project\'s setup (name it with project: its id or folder; without one, your personal setup alone): roles (harness, model, backups, approvals), workflows, rules (notes agents get at moments: start, path, new-file, commit, done), skills (guides with files agents read through their skill tool; the skills: line of a role names those it carries, and a skill no role names goes to every role), settings (approvals, prices, cache), folders that organize roles and workflows (the roles of a workflow can name a whole folder as "name/"), the harnesses on this machine and what they can do, and accounts near their limits.', { project: opt }, a => {
     const c = d.configView(a.project ? { project: a.project } : { personal: true });
     return {
       project: c.project,
       folders: c.scopes,
-      roles: c.roles.map(r => ({ name: r.name, savedIn: r.scope, harness: r.harness, model: r.model, effort: r.effort || 'harness default', fallback: r.fallback, goodAt: r.goodAt, helper: r.helper, approvals: r.approvals || 'as in settings', allow: r.allow })),
+      roles: c.roles.map(r => ({ name: r.name, savedIn: r.scope, ...(r.folder ? { folder: r.folder } : {}), harness: r.harness, model: r.model, effort: r.effort || 'harness default', fallback: r.fallback, goodAt: r.goodAt, helper: r.helper, approvals: r.approvals || 'as in settings', allow: r.allow })),
       builtInRoles: [c.settings.effective.gatekeeper, c.settings.effective.assistant].filter(n => !c.roles.some(r => r.name === n)),
-      workflows: c.workflows.map(w => ({ name: w.name, savedIn: w.scope, goodAt: w.goodAt, roles: w.roles.length ? w.roles : 'every role', body: w.body })),
+      workflows: c.workflows.map(w => ({ name: w.name, savedIn: w.scope, ...(w.folder ? { folder: w.folder } : {}), goodAt: w.goodAt, roles: w.roles.length ? w.roles : 'every role', body: w.body })),
       rules: c.rules.map(r => ({ name: r.name, savedIn: r.scope, on: r.on, when: r.when, roles: r.roles, paths: r.paths, description: r.description, body: r.body })),
       skills: c.skills.map(k => ({ name: k.name, folder: k.dir, from: k.source, on: k.on, carriedBy: k.carriedBy.length ? k.carriedBy : 'every role', pointedBy: k.pointedBy, harness: k.harness, description: k.description })),
       settings: c.settings.effective,
@@ -149,10 +149,10 @@ export function buildAssistantServer(d: Daemon): McpServer {
   tool(
     'propose',
     `Suggest a setup change; the human sees it in the app and applies it with one click (in write mode it's applied at once). command is one of: ${PROPOSABLE.join(', ')}. ` +
-      'role.save makes a new role: { scope, name, harness, model, effort?, fallback?: [..], goodAt, instructions, approvals?, allow?: [..], skills?: [..] }. ' +
+      'role.save makes a new role: { scope, name, harness, model, effort?, fallback?: [..], goodAt, instructions, approvals?, allow?: [..], skills?: [..], folder? }. ' +
       'role.update: { name, changes: { model?, effort? (low, medium, high, xhigh, max), harness?, fallback?: [..] ("harness/model@effort" for a backup\'s own effort), goodAt?, approvals?, allow?: [..], skills?: [..], instructions? } }. ' +
       'settings.save: { scope: "personal" | "repo", patch: { approvals?, models?: { "harness/model": { prices?: { input, output, cacheRead?, cacheWrite? }, cacheMinutes? } } } } (prices in dollars per million tokens). ' +
-      'workflow.save: { scope, name, goodAt, body, roles?: [..] } makes or replaces one; fields left out keep what the workflow has. ' +
+      'workflow.save: { scope, name, goodAt, body, roles?: [..], folder? } makes or replaces one; fields left out keep what the workflow has; a role in roles can be a whole folder, "game-dev/". ' +
       'rule.save (makes or replaces one; send it whole): { scope, name, when: start|path|new-file|commit|done, description, body, roles?: [..], paths?: [..], sections?, include?, requires?, missing?, changes?: [..], unlessChanged?, edited?, skill? (a skill the note points at; then body may be empty) }; ' +
       'to turn a rule or skill off or on without a file, settings.save with patch: { rules: { "<name>": false|true } } or { skills: { … } }. ' +
       'A "repo" scope is a project\'s own folder: add project (its id or folder) to the args; "personal" applies to every project. ' +

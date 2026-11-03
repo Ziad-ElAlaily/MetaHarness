@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { loadConfig, parseFrontMatter } from './config.ts';
+import { docFiles, docFolders, docPath, loadConfig, parseFrontMatter, workflowRoleNames } from './config.ts';
 import type { McpServerDef } from './mcpservers.ts';
 import type { Role } from './types.ts';
 import { BUILTIN_DIR, loadRuleFiles, loadRules, RULE_WHENS, type Rule } from './rules.ts';
@@ -35,7 +35,7 @@ function dirOf(scopes: ScopeDir[], scope: unknown): string {
 }
 
 const NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
-function checkName(name: unknown, what: string): string {
+export function checkName(name: unknown, what: string): string {
   const n = typeof name === 'string' ? name.trim() : '';
   if (!NAME.test(n) || n.includes('..')) throw new Error(`A ${what} name uses letters, digits, dots, dashes and underscores, and starts with a letter or digit (got "${String(name ?? '')}").`);
   return n;
@@ -50,6 +50,10 @@ export interface RoleView {
   file: string;
   /** Also defined in a folder this one overrides (a personal role of the same name, or a built-in one). */
   overrides?: Scope | 'built-in';
+  /** The folder it's organized under; empty: none. */
+  folder: string;
+  /** Other files by this name in the same config folder, which are ignored. */
+  alsoAt?: string[];
   harness: string;
   model: string;
   /** Empty: the harness's default. */
@@ -76,7 +80,12 @@ export interface WorkflowView {
   scope: Scope | 'built-in';
   file: string;
   overrides?: Scope | 'built-in';
+  /** The folder it's organized under; empty: none. */
+  folder: string;
+  /** Other files by this name in the same config folder, which are ignored. */
+  alsoAt?: string[];
   goodAt: string;
+  /** By name, or a whole folder ("game-dev/"). */
   roles: string[];
   body: string;
 }
@@ -119,6 +128,8 @@ export interface GuideView {
 
 export interface ConfigView {
   scopes: ScopeDir[];
+  /** The folders organizing roles and workflows, each in any config folder that has it. */
+  folders: { role: string[]; workflow: string[] };
   roles: RoleView[];
   workflows: WorkflowView[];
   rules: RuleView[];
@@ -134,7 +145,7 @@ export function configView(scopes: ScopeDir[]): ConfigView {
   const builtIn = loadConfig([]);
   const roles = new Map<string, RoleView>();
   const workflows = new Map<string, WorkflowView>();
-  for (const w of builtIn.workflows.values()) workflows.set(w.name, { name: w.name, scope: 'built-in', file: w.file, goodAt: w.goodAt, roles: w.roles, body: w.body });
+  for (const w of builtIn.workflows.values()) workflows.set(w.name, { name: w.name, scope: 'built-in', file: w.file, folder: '', goodAt: w.goodAt, roles: w.roles, body: w.body });
   for (const r of builtIn.roles.values()) if (r.builtIn) roles.set(r.name, roleView(r, 'built-in'));
   const mcp = new Map<string, { name: string; scope: Scope; def: McpServerDef }>();
   const guide = (file: string, def: string): GuideView => {
@@ -154,17 +165,19 @@ export function configView(scopes: ScopeDir[]): ConfigView {
       // Built-in roles (the gatekeeper) have no file to edit.
       if (r.file === '(built in)') continue;
       const before = roles.get(r.name);
-      roles.set(r.name, roleView(r, scope, before?.scope));
+      roles.set(r.name, { ...roleView(r, scope, before?.scope), ...others(join(dir, 'roles'), r.name, r.file) });
     }
     for (const w of c.workflows.values()) {
       const before = workflows.get(w.name);
-      workflows.set(w.name, { name: w.name, scope, file: w.file, overrides: before?.scope, goodAt: w.goodAt, roles: w.roles, body: w.body });
+      workflows.set(w.name, { name: w.name, scope, file: w.file, overrides: before?.scope, folder: w.folder ?? '', ...others(join(dir, 'workflows'), w.name, w.file), goodAt: w.goodAt, roles: w.roles, body: w.body });
     }
     for (const [name, def] of c.mcp) mcp.set(name, { name, scope, def });
   }
   const byName = <T extends { name: string }>(m: Map<string, T>) => [...m.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const foldersIn = (sub: string) => [...new Set(scopes.flatMap(s => docFolders(join(s.dir, sub))))].sort((a, b) => a.localeCompare(b));
   return {
     scopes,
+    folders: { role: foldersIn('roles'), workflow: foldersIn('workflows') },
     roles: byName(roles),
     workflows: byName(workflows),
     rules: rulesView(scopes),
@@ -175,9 +188,15 @@ export function configView(scopes: ScopeDir[]): ConfigView {
   };
 }
 
+/** Other files by this name in the same place: two folders can't both hold a name, and only one is read. */
+function others(root: string, name: string, file: string): { alsoAt?: string[] } {
+  const rest = docFiles(root).filter(f => basename(f.file, '.md') === name && f.file !== file).map(f => f.file);
+  return rest.length ? { alsoAt: rest } : {};
+}
+
 function roleView(r: Role, scope: RoleView['scope'], overrides?: RoleView['scope']): RoleView {
   return {
-    name: r.name, scope, file: r.file, ...(overrides ? { overrides } : {}), harness: r.harness, model: r.model, effort: r.effort ?? '', fallback: r.fallback, goodAt: r.goodAt,
+    name: r.name, scope, file: r.file, ...(overrides ? { overrides } : {}), folder: r.folder ?? '', harness: r.harness, model: r.model, effort: r.effort ?? '', fallback: r.fallback, goodAt: r.goodAt,
     instructions: r.instructions, helper: r.helper, worktree: r.worktree, workflow: r.workflow ?? '', mcp: r.mcp, skills: r.skills ?? [], autoApprove: r.autoApprove, approvals: r.approvals ?? '',
     permissionMode: r.permissionMode ?? '', allow: r.allow, nativeSkills: !!r.nativeSkills,
   };
@@ -268,20 +287,34 @@ interface Previous {
 }
 
 /**
- * Saves a role as roles/<name>.md in the given folder. With `previous`, the old file goes (a
- * rename or a move), unless it's the same file.
+ * The folder an item is saved under: the one asked for, or, unsaid, the one it was in (so a save
+ * that doesn't know about folders doesn't move it).
+ */
+function folderFor(asked: unknown, prevFile: string | undefined, prevRoot: string | undefined): string {
+  if (typeof asked === 'string') return asked.trim() ? checkName(asked, 'folder') : '';
+  return prevFile && prevRoot && dirname(prevFile) !== prevRoot && dirname(dirname(prevFile)) === prevRoot ? basename(dirname(prevFile)) : '';
+}
+
+const inFolder = (root: string, folder: string, name: string) => (folder ? join(root, folder, `${name}.md`) : join(root, `${name}.md`));
+
+/**
+ * Saves a role as roles/<name>.md in the given folder, or roles/<folder>/<name>.md under a folder.
+ * With `previous`, the old file goes (a rename or a move), unless it's the same file.
  */
 export function saveRole(scopes: ScopeDir[], b: Record<string, unknown>): string {
   const name = checkName(b.name, 'role');
   const dir = dirOf(scopes, b.scope);
   const harness = str(b.harness);
   if (!harness) throw new Error('A role needs a harness.');
-  const file = join(dir, 'roles', `${name}.md`);
+  const root = join(dir, 'roles');
   const prev = (b.previous ?? {}) as Previous;
   // A built-in role is saved as a copy in a folder; its other settings (wake:) come along.
   const builtInPrev = prev.scope === ('built-in' as Scope);
-  const prevFile = !prev.name ? undefined : builtInPrev ? join(BUILTIN_DIR, 'roles', `${checkName(prev.name, 'role')}.md`) : join(dirOf(scopes, prev.scope ?? b.scope), 'roles', `${checkName(prev.name, 'role')}.md`);
-  if (file !== prevFile && existsSync(file)) throw new Error(`There's already a role called ${name} in the ${String(b.scope)} folder.`);
+  const prevRoot = !prev.name || builtInPrev ? undefined : join(dirOf(scopes, prev.scope ?? b.scope), 'roles');
+  const prevFile = !prev.name ? undefined : builtInPrev ? join(BUILTIN_DIR, 'roles', `${checkName(prev.name, 'role')}.md`) : docPath(prevRoot!, checkName(prev.name, 'role')) ?? join(prevRoot!, `${prev.name}.md`);
+  const file = inFolder(root, folderFor(b.folder, prevFile, prevRoot), name);
+  const taken = docPath(root, name);
+  if (taken && taken !== prevFile) throw new Error(`There's already a role called ${name} in the ${String(b.scope)} folder${dirname(taken) === root ? '' : `, under ${basename(dirname(taken))}`}.`);
   const old = prevFile && existsSync(prevFile) ? readFileSync(prevFile, 'utf8') : '';
   const extra = Object.entries(parseFrontMatter(old).meta).filter(([k]) => !ROLE_KEYS.includes(k));
   const allow = strList(b.allow);
@@ -312,18 +345,21 @@ export function saveRole(scopes: ScopeDir[], b: Record<string, unknown>): string
   return file;
 }
 
-/** Saves a workflow as workflows/<name>.md; an old playbooks/<name>.md of the same name moves there. */
+/** Saves a workflow as workflows/<name>.md, or workflows/<folder>/<name>.md; an old playbooks/<name>.md of the same name moves there. */
 export function saveWorkflow(scopes: ScopeDir[], b: Record<string, unknown>): string {
   const name = checkName(b.name, 'workflow');
   const dir = dirOf(scopes, b.scope);
   const body = str(b.body);
   if (!body) throw new Error('A workflow needs its steps: what the lead should do.');
-  const file = join(dir, 'workflows', `${name}.md`);
+  const root = join(dir, 'workflows');
   const prev = (b.previous ?? {}) as Previous;
   const prevDir = prev.name ? dirOf(scopes, prev.scope ?? b.scope) : undefined;
-  const prevFiles = prev.name && prevDir ? ['workflows', 'playbooks'].map(sub => join(prevDir, sub, `${checkName(prev.name, 'workflow')}.md`)) : [];
-  if (!prevFiles.includes(file) && existsSync(file)) throw new Error(`There's already a workflow called ${name} in the ${String(b.scope)} folder.`);
+  const prevRoot = prevDir ? join(prevDir, 'workflows') : undefined;
+  const prevFiles = prev.name && prevDir && prevRoot ? [docPath(prevRoot, checkName(prev.name, 'workflow')) ?? join(prevRoot, `${prev.name}.md`), join(prevDir, 'playbooks', `${prev.name}.md`)] : [];
   const oldFile = prevFiles.find(existsSync);
+  const file = inFolder(root, folderFor(b.folder, oldFile, prevRoot), name);
+  const taken = docPath(root, name);
+  if (taken && !prevFiles.includes(taken)) throw new Error(`There's already a workflow called ${name} in the ${String(b.scope)} folder${dirname(taken) === root ? '' : `, under ${basename(dirname(taken))}`}.`);
   const old = oldFile ? readFileSync(oldFile, 'utf8') : '';
   const extra = Object.entries(parseFrontMatter(old).meta).filter(([k]) => k !== 'good_at' && k !== 'roles');
   writeDoc(file, [['good_at', str(b.goodAt)], ['roles', strList(b.roles).join(', ')], ...extra], body, leadingComments(old));
@@ -380,14 +416,116 @@ export function saveRule(scopes: ScopeDir[], b: Record<string, unknown>): string
 export function deleteItem(scopes: ScopeDir[], kind: 'role' | 'workflow' | 'rule', b: Record<string, unknown>): string {
   const name = checkName(b.name, kind);
   const dir = dirOf(scopes, b.scope);
+  const filed = (sub: string) => docPath(join(dir, sub), name) ?? join(dir, sub, `${name}.md`);
   const files =
-    kind === 'role' ? [join(dir, 'roles', `${name}.md`)]
+    kind === 'role' ? [filed('roles')]
     : kind === 'rule' ? [join(dir, 'rules', `${name}.md`)]
-    : [join(dir, 'workflows', `${name}.md`), join(dir, 'playbooks', `${name}.md`)];
+    : [filed('workflows'), join(dir, 'playbooks', `${name}.md`)];
   const found = files.filter(existsSync);
   if (!found.length) throw new Error(`There's no ${kind} called ${name} in the ${String(b.scope)} folder.`);
   for (const f of found) rmSync(f);
   return found[0];
+}
+
+/* ---------------- folders ---------------- */
+
+const folderSub = (kind: unknown) => {
+  if (kind !== 'role' && kind !== 'workflow') throw new Error('Folders organize roles and workflows ("kind": role or workflow).');
+  return kind === 'role' ? 'roles' : 'workflows';
+};
+
+/** Changes the names on every workflow's roles: line, in the folders given; the rest of each file stays as written. */
+function rewriteRoleRefs(scopes: ScopeDir[], change: (refs: string[]) => string[]): void {
+  for (const { dir } of scopes) {
+    for (const { file } of docFiles(join(dir, 'workflows'))) {
+      const text = readFileSync(file, 'utf8');
+      const refs = strList(parseFrontMatter(text).meta.roles);
+      const next = change(refs);
+      if (next.join() === refs.join()) continue;
+      // Only the front matter's line: a body can mention roles: too.
+      const start = text.indexOf('---');
+      const end = text.indexOf('\n---', start + 3);
+      if (start < 0 || end < 0) continue;
+      const head = text.slice(start, end).replace(/^(\s*roles\s*:\s*).*$/m, (_, key) => `${key}${next.join(', ')}`);
+      writeFileSync(file, text.slice(0, start) + head + text.slice(end));
+    }
+  }
+}
+
+const isDir = (p: string) => existsSync(p) && statSync(p).isDirectory();
+
+/**
+ * Makes a folder, or with `previous` renames one, in every config folder that has it, along with
+ * the workflows that name it.
+ */
+export function saveFolder(scopes: ScopeDir[], b: Record<string, unknown>): string {
+  const sub = folderSub(b.kind);
+  const name = checkName(b.name, 'folder');
+  if (b.previous === undefined) {
+    const root = join(dirOf(scopes, b.scope), sub);
+    if (docFolders(root).includes(name)) throw new Error(`There's already a folder called ${name}.`);
+    mkdirSync(join(root, name), { recursive: true });
+    return `Made the folder ${name}.`;
+  }
+  const prev = checkName(b.previous, 'folder');
+  if (prev === name) return `It's already called ${name}.`;
+  const roots = scopes.map(s => join(s.dir, sub)).filter(r => isDir(join(r, prev)));
+  if (!roots.length) throw new Error(`There's no folder called ${prev}.`);
+  for (const root of roots) {
+    const from = join(root, prev), to = join(root, name);
+    if (!existsSync(to)) {
+      renameSync(from, to);
+      continue;
+    }
+    // Into one that's there already: the two become one.
+    for (const f of readdirSync(from)) if (!existsSync(join(to, f))) renameSync(join(from, f), join(to, f));
+    if (!readdirSync(from).length) rmSync(from, { recursive: true });
+  }
+  if (b.kind === 'role') rewriteRoleRefs(scopes, refs => refs.map(r => (r === `${prev}/` ? `${name}/` : r)));
+  return `Renamed ${prev} to ${name}.`;
+}
+
+/**
+ * Takes a folder away. What was in it stays, out of any folder, and a workflow that named the folder
+ * names its roles instead, so it can start the same ones. With `contents`, what's in it goes too,
+ * and a workflow naming the folder keeps the name, which then shows as missing: it allows nobody
+ * from it rather than everybody.
+ */
+export function deleteFolder(scopes: ScopeDir[], b: Record<string, unknown>): string {
+  const sub = folderSub(b.kind);
+  const name = checkName(b.name, 'folder');
+  const roots = scopes.map(s => join(s.dir, sub)).filter(r => isDir(join(r, name)));
+  if (!roots.length) throw new Error(`There's no folder called ${name}.`);
+  if (b.contents === true) {
+    let gone = 0;
+    for (const root of roots) {
+      gone += readdirSync(join(root, name)).filter(f => f.endsWith('.md')).length;
+      rmSync(join(root, name), { recursive: true });
+    }
+    return `Deleted the folder ${name} and the ${gone} ${gone === 1 ? 'item' : 'items'} in it.`;
+  }
+  const members = loadConfig(scopes.map(s => s.dir), { builtIn: false });
+  const roles = workflowRoleNames([`${name}/`], members.roles.values());
+  const stuck: string[] = [];
+  let moved = 0;
+  for (const root of roots) {
+    const from = join(root, name);
+    for (const f of readdirSync(from).filter(f => f.endsWith('.md'))) {
+      if (existsSync(join(root, f))) {
+        stuck.push(f);
+        continue;
+      }
+      renameSync(join(from, f), join(root, f));
+      moved++;
+    }
+    if (!readdirSync(from).length) rmSync(from, { recursive: true });
+  }
+  // A list left empty would mean every role: better a name that shows up as missing.
+  if (b.kind === 'role') rewriteRoleRefs(scopes, refs => {
+    const next = [...new Set(refs.flatMap(r => (r === `${name}/` ? roles : [r])))];
+    return next.length ? next : refs;
+  });
+  return `Removed the folder ${name}${moved ? `; ${moved} ${moved === 1 ? 'item' : 'items'} moved out of it` : ''}.${stuck.length ? ` ${stuck.join(', ')} stayed in it, as another file has the same name.` : ''}`;
 }
 
 const GUIDES: Record<string, string> = { methodology: 'methodology.md', 'helper-methodology': 'helper-methodology.md' };

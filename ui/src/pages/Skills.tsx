@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { Scope, SkillDef, SkillSource } from '../types.ts';
 import { Field, Markdown, Toggle } from '../components/common.tsx';
 import { ListItem, Section } from './setup.tsx';
@@ -40,13 +41,14 @@ export function SkillItem({ skill, on, onClick }: { skill: SkillDef; on: boolean
   );
 }
 
-export function SkillDetail({ skill, scopes, onSave }: { skill: SkillDef; scopes: { scope: Scope }[]; onSave: (b: Record<string, unknown>) => unknown }) {
+export function SkillDetail({ skill, scopes, onSave, exportButton }: { skill: SkillDef; scopes: { scope: Scope }[]; onSave: (b: Record<string, unknown>) => unknown; exportButton?: ReactNode }) {
   const switchScope: Scope = skill.switchedBy ?? (scopes.some(s => s.scope === 'repo') ? 'repo' : 'personal');
   return (
     <div className="editor">
       <div className="editor-scroll">
         <div className="editor-title">
           <h2>{skill.name}</h2>
+          {exportButton}
           {skill.overrides && <span className="hint">Replaces the {SOURCE[skill.overrides]} skill of this name.</span>}
         </div>
         <Section title="On or off">

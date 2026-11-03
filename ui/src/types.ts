@@ -161,6 +161,10 @@ export interface RoleDef {
   scope: Scope | 'built-in';
   file: string;
   overrides?: Scope | 'built-in';
+  /** The folder it's organized under; empty: none. */
+  folder: string;
+  /** Other files by this name, which are ignored. */
+  alsoAt?: string[];
   harness: string;
   model: string;
   /** Empty: the harness's default. */
@@ -188,8 +192,12 @@ export interface WorkflowDef {
   scope: Scope | 'built-in';
   file: string;
   overrides?: Scope | 'built-in';
+  /** The folder it's organized under; empty: none. */
+  folder: string;
+  /** Other files by this name, which are ignored. */
+  alsoAt?: string[];
   goodAt: string;
-  /** The roles it uses; empty: every role. */
+  /** The roles it uses, by name or a whole folder ("game-dev/"); empty: every role. */
   roles: string[];
   body: string;
 }
@@ -262,8 +270,54 @@ export interface McpDef {
   headers?: Record<string, string>;
 }
 
+export type ItemKind = 'role' | 'workflow' | 'rule' | 'skill' | 'mcp';
+
+export interface PackRef {
+  kind: ItemKind;
+  name: string;
+}
+
+/** An export, once what its picks need has come along (design §23). */
+export interface PackExport {
+  members: (PackRef & { via?: string })[];
+  builtIn: PackRef[];
+  missing: (PackRef & { via?: string })[];
+  leftOut: (PackRef & { via?: string })[];
+  suggested: PackRef[];
+  warnings: { item: string; level: 'secret' | 'info'; text: string }[];
+  /** Something looks like a secret: no file until you say it's fine. */
+  blocked: boolean;
+  filename: string;
+  text: string | null;
+}
+
+export interface PackReviewItem extends PackRef {
+  status: 'new' | 'same' | 'differs';
+  on: boolean;
+  target: string;
+  sensitive?: string;
+  note?: string;
+  powers: string[];
+  runs?: { harness: string; model: string; state: 'here' | 'backup' | 'no'; backup?: string };
+  blanks?: string[];
+  text?: string;
+  current?: string;
+  files?: { path: string; bytes: number; binary: boolean; exec: boolean }[];
+}
+
+export interface PackReview {
+  name: string;
+  scope: Scope;
+  dir: string;
+  items: PackReviewItem[];
+  unmet: (PackRef & { by: string })[];
+  needs: PackRef[];
+}
+
 export interface ConfigView {
   scopes: { scope: Scope; dir: string }[];
+  /** The folders organizing roles and workflows. */
+  folders: { role: string[]; workflow: string[] };
   roles: RoleDef[];
   workflows: WorkflowDef[];
   rules: RuleDef[];

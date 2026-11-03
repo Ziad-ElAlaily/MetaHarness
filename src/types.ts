@@ -55,6 +55,8 @@ export interface Role {
   approvals?: import('./settings.ts').ApprovalMode;
   /** What wakes agents in this role besides messages: `landed`, work reaching the goal branch (the cartographer). */
   wake?: string[];
+  /** The folder it's organized under: roles/<folder>/<name>.md. */
+  folder?: string;
   /** Ships with MetaHarness (defaults/roles/); a folder's role of the same name replaces it. */
   builtIn?: boolean;
   file: string;
@@ -64,7 +66,9 @@ export interface Role {
 export interface Workflow {
   name: string;
   goodAt: string;
-  /** The roles it uses; the agents running it can start only these (and quick helpers). Empty: every role. */
+  /** The folder it's organized under: workflows/<folder>/<name>.md. */
+  folder?: string;
+  /** The roles it uses, by name or a whole folder ("game-dev/"); the agents running it can start only these (and quick helpers). Empty: every role. */
   roles: string[];
   body: string;
   file: string;

@@ -639,8 +639,8 @@ restarting the daemon. The pages write the same files described below.
   workflow. Copy one of the shipped ones to start. A `roles:` line (`roles: architect,
   godot-implementer, reviewer`) names the roles it uses: the lead and the team can then start
   only those, plus quick helpers, so a growing list of roles doesn't confuse them. A workflow
-  it hands on to brings its own roles; one without the line keeps every role. You can still
-  start any role yourself.
+  it hands on to brings its own roles; one without the line keeps every role. The line can name a
+  whole folder of roles too (see Folders below). You can still start any role yourself.
 - **Agent instructions.** `methodology.md` is what every agent reads about working on a team;
   `helper-methodology.md` is for quick helpers. Edit them in either config folder.
 - **Rules** are short notes MetaHarness hands an agent at a moment it can see: at the start,
@@ -800,6 +800,95 @@ restarting the daemon. The pages write the same files described below.
   tokens, with cache reads and writes if they differ) and how long its prompt cache lasts. They
   go in `settings.json`, which also holds the Settings page's choices; the repository's file
   wins over your personal one, key by key.
+
+### Folders: keeping roles and workflows organized
+
+The Roles and Workflows tabs each have their own folders, like `game-dev`, `mobile-dev` or
+`utilities`, one level deep. **+ Folder** makes one. To file something, pick or type a folder on the
+item and save, or on a computer drag it onto the folder. **⋯** on a folder exports, renames or
+removes it. **Remove folder** keeps what's in it, out of any folder; **Delete with contents** deletes
+those files too.
+
+They're real folders on disk (`.metaharness/roles/game-dev/gd-reviewer.md`), so you can arrange them
+in an editor too. A role's name is its file's name wherever it sits, so nothing that names it
+changes when it moves. That also means a name can only be used once in a config folder: the app
+refuses a second one, and points it out if you make one by hand. Folders only organize: agents see
+the same roles and workflows either way. A folder with the same name in the personal and the
+project folder shows as one. Rules don't have folders.
+
+**A workflow can use a whole folder.** Under *Roles it uses*, name roles one by one, a folder with a
+trailing slash, or both:
+
+```markdown
+---
+good_at: a Godot feature
+roles: game-dev/, reviewer
+---
+```
+
+A role you file in `game-dev` later is included from then on. Renaming the folder updates the
+workflows that name it, in this project and your personal folder; workflows in other projects are
+yours to change. Removing the folder has them name its roles one by one instead. A folder that
+doesn't exist or is empty gives the workflow no roles from it, and the page warns about one that
+doesn't exist. It doesn't open the workflow up to every role.
+
+### Sharing roles and workflows
+
+To send someone your setup, use **Export…** on a folder (under its **⋯**), or on a role, workflow,
+rule, skill or MCP server. You get one file, `<name>.mh-export.json`, to send however you like. They
+choose **Import…** on the Roles, Workflows, Rules or Tools & skills tab and pick or paste it. Any of
+those tabs takes any file, and the review shows everything in it.
+
+What comes along: a workflow brings the roles and role folders on its `roles:` line and the
+workflows it hands on to; a role brings its workflow, skills and MCP servers, and a rule the skill
+it points at. **Leave out** what the other person should bring themselves, and **add** anything else
+in the dialog. Exporting a folder of workflows brings their roles; exporting a folder of roles
+brings those roles and doesn't look for workflows that use them. A workflow with no `roles:` line
+brings no roles, so name them. What ships with MetaHarness isn't packed. Rules that name a role in
+the export are offered, not added.
+
+**What stays home.** An MCP server's `env` and `headers` values are taken out unless they only
+name a variable (`${TOKEN}`). Hidden files in a skill's folder aren't packed. If something still
+looks like a key or a password, the export stops and shows you where, until you take it out or say
+it's fine. That check knows common token shapes and can miss others. Export also tells you when a
+file names a folder on your machine. The file is plain JSON: read it if you want to know exactly
+what's going out.
+
+**Importing is a reviewed copy.** Nothing is written until you press **Import**. The review lists
+every item with its text, whether it's new, already here or different from yours, and what it can
+do beyond giving agents text: commands it runs unasked, its own approval mode, programs it starts,
+scripts in a skill. A file can tell agents anything, so read what you don't recognise. These stay
+off unless you turn them on:
+
+- anything that would overwrite yours (no copy is kept, so read both first),
+- a role settings gives a job (the gatekeeper decides what runs without you),
+- anything that replaces something built in (a rule like `stay-in-project`).
+
+If you keep your own `reviewer`, a workflow from the file simply uses yours. If a role's harness
+isn't on your machine, the review says so and lets you pick what it runs on. MCP values that were
+taken out are listed for you to fill in on Tools & skills. Choose where it all goes: this project, or
+your personal folder for every project.
+
+Roles and workflows arrive in the folder they had. If they had none and several of a kind came
+together, they arrive in a folder named after the export. Yours stays in your folder, even if you
+overwrite it.
+
+**After that they're yours.** Nothing remembers where they came from: edit them, refile them, delete
+them. To drop a whole import you didn't like, use **Delete with contents** under the folder's **⋯**.
+If someone sends a newer file, importing it works just like the first time: what changed shows as
+different from yours, and you choose item by item.
+
+From the command line:
+
+```sh
+mh export --role-folder game-dev                   # writes game-dev.mh-export.json
+mh export --workflow godot --rule api-style        # items by name, each with what it needs
+mh import game-dev.mh-export.json --to personal    # shows the review, then asks
+```
+
+`mh import` copies what the review turns on. `--replace` adds what it left off, and `--run-on
+<harness/model>` moves the roles nothing here can run. Without a terminal to ask at, it needs
+`--yes`.
 
 ## 9. Restarts
 

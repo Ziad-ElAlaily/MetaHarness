@@ -546,7 +546,7 @@ do, the CLI can do too, and vice versa.
 | `GET /projects` | The projects (§22): those opened, most recent first, then folders past goals worked in; each with its goals, rooms, how many run, what waits for you, and whether it's trusted |
 | `GET /browse?path&hidden` | The daemon's folders, one at a time, for Open folder: each says whether it's a git repository, has its own `.metaharness`, or is a project |
 | `GET /agent?goal=<id>&name=<agent>` | One agent in full: its system prompt, brief, folder, worktree and copied dependencies, native session, the command to open it by hand, its harness's manifest |
-| `POST /commands` | Every action a client can take |
+| `POST /commands` | Every action a client can take, including `folder.*` and `share.*` (§23) |
 
 The API listens on `localhost:7777` (configurable), and clients authenticate with a token
 stored in `~/.metaharness/token`, as a bearer header or `?token=` (for `EventSource`). The web
@@ -1564,6 +1564,96 @@ keeps the project in the address (`project=<id>`) and remembers the last one; ev
 sends says which. A goal from another project opens in it.
 
 ---
+
+## 23. Folders and sharing: organizing setup, and passing it on
+
+Setup grows past what one flat list can hold, and a good workflow is worth passing on. Two plain
+answers: **folders** organize, and **exports** are a file you send. The first design was a package
+manager: named packages used as tags with filters, versions, an install record per package, updates
+that replaced what you hadn't edited, uninstall that restored what it overwrote. It was built, looked
+at, and removed before it shipped, for reasons worth keeping. People tidy by filing a role in a folder
+in the tab where the role is, not by tagging it on another page. And nothing here looks like a
+package ecosystem: there's no registry and nothing announces a new version, so updates only come when
+a friend sends another file. By then you've usually edited what they sent, if only to pick models you
+have, and tracking can't merge that anyway; it comes down to keep yours or take theirs.
+
+### Folders
+
+**Real folders.** `roles/<folder>/<name>.md` and `workflows/<folder>/<name>.md`, one level
+(`docFiles` in `src/config.ts`), as files are the source of truth and people arrange them in editors
+too. Each tab's folders are its own, and a name that's in both isn't linked. An item is in one place.
+
+**A name doesn't change with its folder.** A role's name is its file's name, so everything that
+names roles (workflows, rules, briefs, the event log) is untouched by filing, and loaders hand the
+rest of the system the same maps as before. The price is that names stay unique across folders in
+a config folder. Saving refuses a taken name; a duplicate made by hand is reported (`alsoAt`), and
+the one that's read is fixed: directly inside wins, then the last folder by name. Layers work as
+before: by name, the most specific config folder wins, wherever each has it filed.
+
+**A save that doesn't mention a folder leaves the item in it**, so clients that don't know about
+folders (the assistant's `workflow.save`, old scripts) can't scatter things.
+
+**A workflow can name a folder**: `roles: game-dev/, reviewer`. `workflowRoleNames` expands it
+wherever a workflow's roles are used, as the folder is at that moment, so organizing a role into the
+folder is what adds it. An empty or missing folder expands to nobody. It must never read as no
+`roles:` line at all, which means every role, so removing a folder writes its roles out one by one
+and keeps the reference if that would leave the list empty. Renaming rewrites the line in the
+workflows of the config folders in view; another project's can't be seen, and shows as a warning there.
+
+Rules keep their grouping by when they fire.
+
+### Sharing
+
+**Importing is a reviewed copy.** Files land as ordinary files and are the importer's from then on.
+Nothing records where they came from, so importing again is the same as the first time: each item is
+new, the same, or different from yours. The problems that do come up are handled at the review: name
+clashes (generic names like `reviewer` collide; keeping yours is the default and the workflow simply
+uses it), harnesses you don't have (pick another for that role), and trying something you don't like
+(delete its folder with its contents).
+
+**The file.** One JSON document, `<name>.mh-export.json`, `format: metaharness-export`
+(`src/sharing.ts`). JSON because it needs no library at either end, can be pasted into a chat, and a
+reader can open it. It holds roles, workflows, rules, skills and MCP servers: files as written, so
+comments and unknown front-matter keys survive, and a skill's files as text or base64. Settings never
+go, as they describe a machine, and neither do guidelines, casts or harness profiles, which are rarely
+shared and in the last case run programs.
+
+**What goes in is worked out.** The picks (a folder's items, or one item) bring what they need, read
+from their own text: a workflow's `roles:`, folders included, and the workflows it names in
+backticks; a role's `workflow:`, `skills:` and `mcp:`; a rule's `skill:`. `leaveOut` stops something
+coming along; an item that ships with MetaHarness is named, not packed.
+
+**Sharing is publishing.** The export is where secrets leak, so an MCP server's env and header
+values are removed unless they only reference a variable, hidden files in a skill stay behind, and
+a scan for keys and passwords stops the export until the person says it's fine. It looks for known
+token shapes and `password = …`-style assignments, so it can miss things and can cry wolf; the
+second is why it can be overridden.
+
+**A file is code from someone else.** Roles and rules instruct agents, MCP servers run programs. So:
+
+- `parseExport` refuses anything that could land outside its folder (names through the same check
+  as saving, paths with no `..`, absolute parts, backslashes or hidden segments) before anything
+  else reads it, and importing replaces a symlink rather than writing through it.
+- `share.review` writes nothing. It says per item what it would do, and spells out powers: `allow:`
+  lists, approval and permission modes, what a server runs, a skill's programs.
+- The default is additive. A new item comes in when you confirm. Overwriting yours, a role settings
+  gives a job (a file must not be able to swap the gatekeeper in passing), and replacing something
+  built in (or turning a built-in rule off) are off until you turn them on.
+- The commands are on the client API only. Agents have no tool that reaches them, and the
+  assistant's `propose` can't import a file.
+
+The check doesn't make a file safe. It makes what it would do visible, the same bargain as trusting
+a folder (§22). Its text can still tell an agent to do something foolish. Overwriting keeps no copy:
+it's opt-in, both versions can be read first, and it's confirmed.
+
+**Where it lands.** The folder an item had, so `roles: game-dev/` still means what it meant; else, for
+several of a kind, a folder named after the export; a lone item arrives loose. What you already have
+by that name stays where you filed it, overwritten or not.
+
+**Left for later.** Importing from a URL, signatures, tracking where something came from (if people
+do swap updates often), switching a folder of roles and workflows on and off per project, nested
+folders, folders for rules, and rename-on-conflict, which would have to rewrite every reference to
+the renamed item.
 
 ## Appendix A. Harness capabilities (checked 2026-10-17, Antigravity 2026-10-18)
 

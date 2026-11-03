@@ -1,3 +1,4 @@
+import { workflowRoleNames } from './config.ts';
 import { resolveName } from './fuzzy.ts';
 import { skillList, skillPart, skillSummary } from './skills.ts';
 import { parseCanvasOps } from './rooms.ts';
@@ -230,7 +231,7 @@ export class Hub {
         if (!r.match) return `There's no workflow called "${want}". Workflows:\n${list()}`;
         const w = flows.get(r.match)!;
         d.workflowRead(rec, w.name);
-        const roles = w.roles.length ? `\n\nRoles it uses: ${w.roles.join(', ')}.` : '';
+        const roles = w.roles.length ? `\n\nRoles it uses: ${workflowRoleNames(w.roles, this.d.cfg(rec).roles.values()).join(', ') || 'none (the folder it names is empty)'}.` : '';
         return `${r.guessed ? `(Took "${want}" to mean ${w.name}.)\n` : ''}# Workflow: ${w.name}\n\n${w.body}${roles}`;
       }
 

@@ -1,7 +1,7 @@
 # Tracker
 
 Where MetaHarness stands against the plan in [DESIGN.md §19](DESIGN.md). Update this file when a
-step lands. Last updated 2026-11-01.
+step lands. Last updated 2026-11-03.
 
 ## Milestone 0: a small team works ✅
 
@@ -636,6 +636,13 @@ Findings from the run:
   scripted agents only: not yet run on a real harness, so whether agents actually use `dismiss`
   unprompted is unknown.
 
+- [x] **Folders and sharing** (DESIGN.md §23, GUIDE.md §8). One-level folders under the Roles and
+  Workflows tabs, real folders on disk; workflows can name a whole folder of roles. A folder or item
+  exports to one file, and importing is a reviewed copy with nothing tracked afterwards. Tested with
+  scripted agents, and through the CLI and the web app at desktop and phone width (headless). Not yet
+  tried: a file sent to another real machine, or the Share button, which needs https and a browser
+  that can share files.
+
 ## Milestone 3: improve
 
 - [ ] Role×model stats, retrospectives (totalling the Design view's findings and reports across goals),
@@ -655,7 +662,7 @@ Findings from the run:
 ## Resuming work
 
 ```sh
-npm install && npm test        # 188 tests, about half a minute, no model calls
+npm install && npm test        # 213 tests, about half a minute, no model calls
 node src/cli.ts doctor         # what's installed and signed in here
 node src/cli.ts daemon --fake  # try it without spending anything
 ```

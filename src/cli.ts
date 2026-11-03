@@ -50,6 +50,14 @@ const HELP = `mh: run a team of AI agents from different providers on one goal
   mh approve <item> [<note>]         Approve a permission request or a decision from your Inbox
   mh deny <item> [<reason>]          Deny it; the agent gets the reason (for a decision: what to change)
   mh dismiss <item>                  Clear an Inbox item
+  mh export --role-folder <f> | --workflow-folder <f> | --workflow <w> | --role <r> | --rule <r> | --skill <s> | --mcp <m>
+            [--name <n>] [<file>]    Write them to one file to send to someone, each with what it needs (commas
+                                     for several; default file: <name>.mh-export.json). Stops if something
+                                     looks like a secret, unless --allow-secrets
+  mh import <file> [--to project|personal] [--replace] [--run-on <harness/model>] [--yes]
+                                     Review a file someone sent, then copy it into your setup. Asks first,
+                                     unless --yes. --replace also takes what would overwrite yours; --run-on
+                                     moves roles that can't run here
   mh away | mh back                  Say you're away: nothing waits on you, leads decide what they can
                                      and approve what reaches outside the project. back: you answer again
 
@@ -96,6 +104,36 @@ async function openProject(path: string | undefined, trust: boolean): Promise<{ 
   return { id: r.project.id, dir: r.project.dir };
 }
 
+/** The project this folder is, when it's one you opened; exports and imports work on its setup, else on your personal one. */
+async function projectHere(): Promise<{ id: string; dir: string } | undefined> {
+  const here = await projectFolder();
+  const { projects } = await command({ cmd: 'project.list' });
+  return (projects as { id: string; dir: string; opened: boolean }[]).find(p => p.opened && p.dir === here);
+}
+
+/** Which folder an export or import means: project, personal, or (unsaid) this folder's project if it has one. */
+async function shareTarget(to: string | undefined): Promise<Record<string, unknown>> {
+  if (to && to !== 'project' && to !== 'personal') die(`Say project or personal, not "${to}".`);
+  const p = to === 'personal' ? undefined : await projectHere();
+  if (to === 'project' && !p) die('This folder isn\'t a project you opened. Open it first with: mh project');
+  return p ? { project: p.id, scope: 'repo' } : { personal: true, scope: 'personal' };
+}
+
+/** Prints what importing a file would do. */
+function printReview(r: any): void {
+  console.log(`\n${r.name}, into ${r.dir}:`);
+  for (const i of r.items) {
+    console.log(`  ${i.on ? '+' : ' '} ${i.status.padEnd(8)}${i.kind}/${i.name}`);
+    if (i.sensitive) console.log(`      ${i.sensitive}`);
+    if (i.note) console.log(`      ${i.note}`);
+    for (const p of i.powers) console.log(`      ${p}`);
+    if (i.runs?.state === 'backup') console.log(`      ${i.runs.harness} isn't here: it runs on its backup ${i.runs.backup}`);
+    if (i.runs?.state === 'no') console.log(`      Nothing here can run it: it's on ${i.runs.harness}, with no backup that's here (--run-on moves it)`);
+    if (i.blanks?.length) console.log(`      To fill in afterwards on Tools & skills: ${i.blanks.join(', ')}`);
+  }
+  for (const u of r.unmet) console.log(`  Needs ${u.kind}/${u.name} (for ${u.by}), which isn't in the file or here.`);
+}
+
 /** Opens the web app, signed in, at a place in it. */
 async function openApp(hash = ''): Promise<void> {
   // The token rides in the address once; the app keeps it for the tab and drops it from the URL.
@@ -119,7 +157,7 @@ function parse(argv: string[]) {
     if (a.startsWith('--')) {
       const key = a.slice(2);
       const next = argv[i + 1];
-      if (next !== undefined && !next.startsWith('--') && !['fake', 'urgent', 'no-resume', 'force', 'worktree', 'trust', 'end'].includes(key)) {
+      if (next !== undefined && !next.startsWith('--') && !['fake', 'urgent', 'no-resume', 'force', 'worktree', 'trust', 'end', 'allow-secrets', 'replace', 'yes'].includes(key)) {
         opt[key] = next;
         i++;
       } else opt[key] = true;
@@ -406,6 +444,62 @@ async function main(): Promise<void> {
       if (!pos[0]) die(`Usage: mh ${cmd} <item>. mh status lists Inbox items.`);
       const r = await command({ cmd: 'inbox.resolve', item: pos[0], decision: cmd, reply: pos.slice(1).join(' ') || undefined });
       console.log(r.result);
+      return;
+    }
+    case 'export': {
+      const target = await shareTarget(s('from'));
+      const named = (['workflow', 'role', 'rule', 'skill', 'mcp'] as const).flatMap(kind => (s(kind) ?? '').split(',').map(x => x.trim()).filter(Boolean).map(name => ({ kind, name })));
+      const foldersAsked = [['role', s('role-folder')], ['workflow', s('workflow-folder')]].filter((x): x is ['role' | 'workflow', string] => !!x[1]);
+      if (foldersAsked.length) {
+        const c = await command({ cmd: 'config.get', ...target });
+        for (const [kind, names] of foldersAsked) {
+          for (const f of names.split(',').map(x => x.trim()).filter(Boolean)) {
+            const inside = (kind === 'role' ? c.roles : c.workflows).filter((i: { folder: string; scope: string }) => i.folder === f);
+            if (!inside.length) die(`There's nothing in a ${kind} folder called ${f}.`);
+            for (const i of inside) named.push({ kind, name: i.name });
+          }
+        }
+      }
+      if (!named.length) die('Say what to export: mh export --role-folder <folder> [<file>], or --workflow, --role, --rule, --skill, --mcp with names.');
+      const name = s('name') ?? foldersAsked[0]?.[1].split(',')[0].trim() ?? named[0].name;
+      const out = s('out') ?? pos[0];
+      const r = await command({ cmd: 'share.export', ...target, name, items: named, allowSecrets: opt['allow-secrets'] === true });
+      for (const m of r.members) console.log(`  ${m.kind}/${m.name}${m.via ? ` (for ${m.via})` : ''}`);
+      for (const w of r.warnings) console.log(`${w.level === 'secret' ? 'Secret?' : 'Note:'} ${w.item}: ${w.text}`);
+      if (r.blocked) die('Not written: something above looks like a secret. Take it out, or say it\'s fine with --allow-secrets.');
+      const file = out ?? r.filename;
+      if (existsSync(file) && opt.force !== true) die(`${file} exists already. Name another file, or use --force.`);
+      writeFileSync(file, r.text);
+      console.log(`Wrote ${file}. Whoever gets it runs: mh import ${file}`);
+      return;
+    }
+    case 'import': {
+      if (!pos[0]) die('Usage: mh import <file> [--to project|personal] [--replace] [--run-on <harness/model>] [--yes]');
+      if (!existsSync(pos[0])) die(`There's no file ${pos[0]}.`);
+      const text = readFileSync(pos[0], 'utf8');
+      const target = await shareTarget(s('to'));
+      const r = await command({ cmd: 'share.review', ...target, text });
+      printReview(r);
+      const choose: Record<string, boolean> = {};
+      if (opt.replace === true) for (const i of r.items) if (i.status !== 'same') choose[`${i.kind}/${i.name}`] = true;
+      const adapt: Record<string, { harness: string; model: string }> = {};
+      const runOn = s('run-on');
+      if (runOn) {
+        const [harness, ...model] = runOn.split('/');
+        for (const i of r.items) if (i.runs?.state === 'no' && choose[`${i.kind}/${i.name}`] !== false) adapt[i.name] = { harness, model: model.join('/') };
+      }
+      const count = r.items.filter((i: { kind: string; name: string; on: boolean; status: string }) => i.status !== 'same' && (choose[`${i.kind}/${i.name}`] ?? i.on)).length;
+      if (!count) return void console.log('\nNothing to import: it\'s here already, or would only overwrite what\'s yours (--replace takes those).');
+      if (opt.yes !== true) {
+        if (!process.stdin.isTTY) die('Say --yes to import it without being asked.');
+        const { createInterface } = await import('node:readline/promises');
+        const rl = createInterface({ input: process.stdin, output: process.stdout });
+        const yes = /^y(es)?$/i.test((await rl.question(`\nImport ${count} ${count === 1 ? 'item' : 'items'}? [y/N] `)).trim());
+        rl.close();
+        if (!yes) die('Not imported.');
+      }
+      const done = await command({ cmd: 'share.import', ...target, text, choose, adapt });
+      console.log(done.result);
       return;
     }
     case 'away':

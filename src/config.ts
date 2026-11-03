@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { loadMcpDefs, type McpServerDef } from './mcpservers.ts';
 import { BUILTIN_DIR, loadRules, type Rule } from './rules.ts';
@@ -63,6 +63,49 @@ function markdownFiles(dir: string): string[] {
   return readdirSync(dir).filter(f => f.endsWith('.md')).map(f => join(dir, f));
 }
 
+const isDir = (p: string) => {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * The markdown files in a roles/ or workflows/ folder and one level of folders inside it, which are
+ * only there to organize them: a file's name is its name wherever it sits. Files directly inside
+ * come last, so where two share a name, that one wins.
+ */
+export function docFiles(root: string): { file: string; folder?: string }[] {
+  if (!existsSync(root)) return [];
+  const top: { file: string }[] = [];
+  const inFolders: { file: string; folder: string }[] = [];
+  for (const name of readdirSync(root).sort()) {
+    const p = join(root, name);
+    if (isDir(p)) {
+      if (name.startsWith('.')) continue;
+      for (const f of readdirSync(p).sort()) if (f.endsWith('.md') && !isDir(join(p, f))) inFolders.push({ file: join(p, f), folder: name });
+    } else if (name.endsWith('.md')) top.push({ file: p });
+  }
+  return [...inFolders, ...top];
+}
+
+/** The file by this name in a roles/ or workflows/ folder, wherever it's filed: the one that's read. */
+export function docPath(root: string, name: string): string | undefined {
+  return docFiles(root).reverse().find(f => basename(f.file, '.md') === name)?.file;
+}
+
+/** The folders in a roles/ or workflows/ folder. */
+export function docFolders(root: string): string[] {
+  return existsSync(root) ? readdirSync(root).sort().filter(n => !n.startsWith('.') && isDir(join(root, n))) : [];
+}
+
+/** The roles a workflow names: "game-dev/" is every role in that folder, as it is now. */
+export function workflowRoleNames(refs: string[], roles: Iterable<{ name: string; folder?: string }>): string[] {
+  const all = [...roles];
+  return [...new Set(refs.flatMap(r => (r.endsWith('/') ? all.filter(x => x.folder === r.slice(0, -1)).map(x => x.name) : [r])))];
+}
+
 /**
  * Loads config from each directory in order; later directories override earlier ones. The
  * built-in rules and workflows come first, unless `builtIn` is false (one folder on its own).
@@ -96,14 +139,14 @@ export function loadConfig(dirs: string[], o: { builtIn?: boolean; repo?: string
   for (const dir of dirs) {
     cfg.methodology = readIf(join(dir, 'methodology.md')) ?? cfg.methodology;
     cfg.helperMethodology = readIf(join(dir, 'helper-methodology.md')) ?? cfg.helperMethodology;
-    for (const file of markdownFiles(join(dir, 'roles'))) {
+    for (const { file, folder } of docFiles(join(dir, 'roles'))) {
       const role = parseRole(file);
-      cfg.roles.set(role.name, role);
+      cfg.roles.set(role.name, { ...role, ...(folder ? { folder } : {}) });
     }
-    for (const file of [...markdownFiles(join(dir, 'playbooks')), ...markdownFiles(join(dir, 'workflows'))]) {
+    for (const { file, folder } of [...markdownFiles(join(dir, 'playbooks')).map(file => ({ file, folder: undefined })), ...docFiles(join(dir, 'workflows'))]) {
       const { meta, body } = parseFrontMatter(readFileSync(file, 'utf8'));
       const name = basename(file, '.md');
-      cfg.workflows.set(name, { name, goodAt: meta.good_at ?? '', roles: list(meta.roles), body, file });
+      cfg.workflows.set(name, { name, goodAt: meta.good_at ?? '', roles: list(meta.roles), body, file, ...(folder ? { folder } : {}) });
     }
   }
   // Approvals need a judge, and the app an assistant, even when nobody wrote one.

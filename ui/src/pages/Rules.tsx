@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { ChangeKind, ConfigView, RuleDef, RuleWhen, Scope } from '../types.ts';
 import { ChipList, Field, Markdown, Toggle, useConfirm } from '../components/common.tsx';
+import { ExportButton, ImportButton } from '../components/Sharing.tsx';
 import { EditorFooter, keyOf, ListItem, ScopePicker, Section, SetupLayout, useDraft, useLeaveGuard, type SetupProps } from './setup.tsx';
 
 const WHEN: { id: RuleWhen; label: string; hint: string }[] = [
@@ -29,7 +30,7 @@ const blank = (config?: ConfigView): RuleDef => ({
 });
 
 /** Rules: notes MetaHarness hands agents at moments it can see (design §18). */
-export function Rules({ config, selected, onSelect, onSave }: SetupProps) {
+export function Rules({ config, selected, onSelect, onSave, onCommand }: SetupProps) {
   const rules = config?.rules ?? [];
   const isNew = selected === 'new' || selected?.startsWith('new:');
   const current = rules.find(r => keyOf(r) === selected) ?? (isNew ? undefined : rules[0]);
@@ -67,9 +68,12 @@ export function Rules({ config, selected, onSelect, onSave }: SetupProps) {
         </>
       }
       action={
-        <button className="btn primary" onClick={() => void go('new')}>
-          + New rule
-        </button>
+        <span className="page-actions">
+          <ImportButton config={config} onSave={onSave} onCommand={onCommand} />
+          <button className="btn primary" onClick={() => void go('new')}>
+            + New rule
+          </button>
+        </span>
       }
       list={
         <>
@@ -104,6 +108,7 @@ export function Rules({ config, selected, onSelect, onSave }: SetupProps) {
             <div className="editor-scroll">
               <div className="editor-title">
                 <h2>{isNew ? 'New rule' : draft.name}</h2>
+                {!isNew && current && <ExportButton kind="rule" name={current.name} scope={current.scope} config={config} onCommand={onCommand} />}
                 {current?.overrides && !isNew && <span className="hint">Replaces the {current.overrides} rule of this name.</span>}
               </div>
               {!isNew && current && (

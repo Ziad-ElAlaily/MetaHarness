@@ -4,7 +4,7 @@ import { basename, dirname, extname, isAbsolute, join, normalize, relative, sep 
 import { homedir, tmpdir } from 'node:os';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { EventStore } from './store.ts';
-import { loadConfig, type Config } from './config.ts';
+import { loadConfig, workflowRoleNames, type Config } from './config.ts';
 import { resolveName } from './fuzzy.ts';
 import { Hub, TOOL_NAMES } from './hub.ts';
 import * as git from './git.ts';
@@ -24,7 +24,8 @@ import { cleanGoal, describeClean, type CleanResult } from './clean.ts';
 import { authorsDir, deniedCommandPrefixes, guardEnv, installGuard, readAuthors, refusedGitCommand, removeAuthors } from './guard.ts';
 import { MAP_FILE, compareDesigns, designReport, type DesignReport, type SnapshotInfo } from './design.ts';
 import { packFor, type FileDocs, type Highlights } from './languages.ts';
-import { configView, deleteItem, saveGuide, saveMcp, saveRole, saveRule, saveWorkflow, type ScopeDir } from './configedit.ts';
+import { configView, deleteFolder, deleteItem, saveFolder, saveGuide, saveMcp, saveRole, saveRule, saveWorkflow, type ScopeDir } from './configedit.ts';
+import { buildExport, importExport, parseExport, reviewImport, type ReviewContext } from './sharing.ts';
 import { loadProfiles } from './harnesses.ts';
 import { endTagged, settle, tagged, type Tagged } from './procs.ts';
 import { foldEfforts, splitEffort, type EffortVariant } from './effort.ts';
@@ -994,7 +995,7 @@ export class Daemon {
     // The lead runs the goal's workflow; any role can have one of its own.
     for (const name of [rec.isLead ? workflow : undefined, rec.role.workflow]) {
       const w = name ? g.project.config.workflows.get(resolveName(name, [...g.project.config.workflows.keys()]).match ?? '') : undefined;
-      const roles = w?.roles.length ? `\n\nThe roles it uses, the ones you can spawn besides quick helpers: ${w.roles.join(', ')}.` : '';
+      const roles = w?.roles.length ? `\n\nThe roles it uses, the ones you can spawn besides quick helpers: ${workflowRoleNames(w.roles, g.project.config.roles.values()).join(', ') || 'none (the folder it names is empty)'}.` : '';
       if (w) parts.push(`## Workflow: ${w.name}\n\nFollow this guide, adapting it to the task. When it says to continue with another workflow, read that one with the \`workflow\` tool.\n\n${w.body}${roles}`);
     }
     if (rec.isLead && !workflow && !g.room && g.project.config.workflows.size) {
@@ -1480,7 +1481,7 @@ export class Daemon {
     const names = rec.role.workflow && !rec.isLead ? [rec.role.workflow] : [g.workflow, ...g.chained].filter((w): w is string => !!w);
     const flows = names.map(n => c.workflows.get(resolveName(n, [...c.workflows.keys()]).match ?? '')).filter((w): w is Workflow => !!w);
     if (!flows.length || flows.some(w => !w.roles.length)) return { roles: all, workflows: [] };
-    const allowed = new Set(flows.flatMap(w => w.roles));
+    const allowed = new Set(flows.flatMap(w => workflowRoleNames(w.roles, c.roles.values())));
     return { roles: all.filter(r => r.helper || allowed.has(r.name)), workflows: flows.map(w => w.name) };
   }
 
@@ -5060,6 +5061,28 @@ export class Daemon {
         const what = String(b.cmd).endsWith('.delete') ? 'Deleted' : 'Saved';
         return { result: `${what} ${file}. Agents started from now on use it.`, file, config: this.configView(b) };
       }
+      case 'folder.save':
+      case 'folder.delete': {
+        const { scopes } = this.setupOf(b);
+        const r = b.cmd === 'folder.save' ? { result: saveFolder(scopes, b) } : { result: deleteFolder(scopes, b) };
+        this.reloadConfig();
+        return { ...r, config: this.configView(b) };
+      }
+      case 'share.export': {
+        // Sharing is publishing: what looks like a secret stops it until you say it's fine.
+        const r = buildExport(this.setupOf(b).scopes, b);
+        const blocked = r.warnings.some(w => w.level === 'secret') && b.allowSecrets !== true;
+        const { file, ...rest } = r;
+        return { ...rest, blocked, filename: `${file.name}.mh-export.json`, text: blocked ? null : JSON.stringify(file, null, 2) + '\n' };
+      }
+      case 'share.review':
+        return { ...reviewImport(parseExport(b.text), this.setupOf(b).scopes, b.scope, this.shareContext(b)) };
+      case 'share.import': {
+        const r = importExport(parseExport(b.text), this.setupOf(b).scopes, b.scope, { choose: b.choose as Record<string, boolean>, adapt: b.adapt as Record<string, { harness: string; model?: string }> }, this.shareContext(b));
+        this.reloadConfig();
+        const parts = [`Imported ${r.imported.length} ${r.imported.length === 1 ? 'item' : 'items'}.`, r.unfilled.length ? `Still to fill in on Tools & skills: ${r.unfilled.join(', ')}.` : ''];
+        return { ...r, result: parts.filter(Boolean).join(' '), config: this.configView(b) };
+      }
       case 'settings.save': {
         const scope = this.setupOf(b).scopes.find(x => x.scope === b.scope);
         if (!scope) throw new Error(`There's no ${String(b.scope)} config folder here${b.scope === 'repo' ? ': open a project first' : ''}.`);
@@ -5176,7 +5199,7 @@ export class Daemon {
         return { ...(await this.harnessModels(harness, b.refresh === true)) };
       }
       default:
-        throw new Error(`Unknown command "${String(b.cmd)}". Commands: goal.start, goal.pause, goal.resume, goal.end, goal.clean, goal.delete, goal.procs, goal.sizes, goal.open_folder, agent.message, agent.spawn, agent.pause, agent.resume, agent.stop, agent.open_native, inbox.resolve, harness.test, harness.check, harness.models, limits.check, config.get, project.open, project.create, project.clone, project.forget, project.list, settings.save, role.builtin, role.update, assistant.ask, assistant.reset, assistant.state, assistant.set, assistant.make_default, assistant.options, assistant.apply, assistant.dismiss, role.save, role.delete, workflow.save, workflow.delete, rule.save, rule.delete, guide.save, mcp.save.`);
+        throw new Error(`Unknown command "${String(b.cmd)}". Commands: goal.start, goal.pause, goal.resume, goal.end, goal.clean, goal.delete, goal.procs, goal.sizes, goal.open_folder, agent.message, agent.spawn, agent.pause, agent.resume, agent.stop, agent.open_native, inbox.resolve, harness.test, harness.check, harness.models, limits.check, config.get, project.open, project.create, project.clone, project.forget, project.list, settings.save, role.builtin, role.update, assistant.ask, assistant.reset, assistant.state, assistant.set, assistant.make_default, assistant.options, assistant.apply, assistant.dismiss, role.save, role.delete, workflow.save, workflow.delete, rule.save, rule.delete, guide.save, mcp.save, folder.save, folder.delete, share.export, share.review, share.import.`);
     }
   }
 
@@ -5203,6 +5226,15 @@ export class Daemon {
     if (b.personal === true) return { scopes: this.personalScopes(), config: this.config };
     const p = typeof b.project === 'string' && b.project ? this.project(b.project) : this.defaultProject;
     return p ? { scopes: p.scopes, config: p.config, project: p } : { scopes: this.personalScopes(), config: this.config };
+  }
+
+  /** What reviewing an import needs to know about this machine and setup. */
+  private shareContext(b: { project?: unknown; personal?: unknown }): ReviewContext {
+    const { gatekeeper, assistant, roomLead } = this.setupOf(b).config.settings;
+    return {
+      canRun: h => !!this.harnessOverride || !!this.adapters[h],
+      jobs: { [gatekeeper]: 'it decides which commands run without you', [assistant]: 'it is the assistant in the app', [roomLead]: 'it leads brainstorm rooms' },
+    };
   }
 
   /** Roles, workflows, guidelines and MCP servers with the folder each comes from, plus the harnesses a role can name. */
