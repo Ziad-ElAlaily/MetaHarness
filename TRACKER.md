@@ -636,6 +636,14 @@ Findings from the run:
   scripted agents only: not yet run on a real harness, so whether agents actually use `dismiss`
   unprompted is unknown.
 
+- [x] **Files in a message** (DESIGN.md §14, GUIDE.md §6). Attach by picker, drop or paste in an
+  agent's conversation, Message the team, a room's chat, the assistant and Inbox answers. The file
+  goes in the shared folder on sending, and the message names it, so nothing changes per harness. A
+  big image also gets a smaller copy, made in the browser. Tested with scripted agents, and in a
+  headless browser at desktop and phone width (the Inbox answer box only by type check). Not yet run
+  on a real harness: whether each one looks at the image when told the path is unconfirmed. A new
+  goal or room can't take files yet: it has no shared folder until it starts.
+
 - [x] **Folders and sharing** (DESIGN.md §23, GUIDE.md §8). One-level folders under the Roles and
   Workflows tabs, real folders on disk; workflows can name a whole folder of roles. A folder or item
   exports to one file, and importing is a reviewed copy with nothing tracked afterwards. Tested with
@@ -662,7 +670,7 @@ Findings from the run:
 ## Resuming work
 
 ```sh
-npm install && npm test        # 213 tests, about half a minute, no model calls
+npm install && npm test        # 218 tests, about half a minute, no model calls
 node src/cli.ts doctor         # what's installed and signed in here
 node src/cli.ts daemon --fake  # try it without spending anything
 ```

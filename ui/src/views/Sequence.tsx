@@ -1,3 +1,4 @@
+import { shortAttachments } from '../components/Attachments.tsx';
 import { useMemo, useState } from 'react';
 import { clock, oneLine } from '../format.ts';
 import type { Goal, MhEvent } from '../types.ts';
@@ -26,7 +27,7 @@ export default function Sequence({ goal, events, onSelect }: { goal: Goal; event
       .filter(e => !who || e.agent === who || e.data.to === who || e.parent === who)
       .map(e =>
         e.type === 'message.sent'
-          ? { e, from: e.agent!, to: String(e.data.to), kind: 'msg' as const, text: String(e.data.text) }
+          ? { e, from: e.agent!, to: String(e.data.to), kind: 'msg' as const, text: shortAttachments(String(e.data.text)) }
           : e.type === 'agent.spawned'
             ? { e, from: e.parent ?? 'human', to: e.agent!, kind: 'spawn' as const, text: `spawned as ${e.data.role}` }
             : { e, from: e.agent!, to: e.agent!, kind: 'done' as const, text: String(e.data.note) },

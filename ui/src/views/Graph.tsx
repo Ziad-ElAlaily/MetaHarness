@@ -1,3 +1,4 @@
+import { shortAttachments } from '../components/Attachments.tsx';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Background, BaseEdge, Controls, getBezierPath, Handle, MarkerType, Position, ReactFlow, useReactFlow, ReactFlowProvider, type Edge, type EdgeProps, type Node, type NodeChange, type NodeProps } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -249,7 +250,7 @@ function conversation(events: MhEvent[]): Said[] {
       out.push({ seq: e.seq, ts: e.ts, from: e.parent ?? 'human', to: e.agent, text: String(e.data.brief ?? ''), kind: 'brief' });
     } else if (e.type === 'message.sent') {
       const id = e.data.id ? String(e.data.id) : undefined;
-      out.push({ seq: e.seq, ts: e.ts, from: e.agent, to: String(e.data.to), text: String(e.data.text ?? ''), kind: 'message', urgent: !!e.data.urgent, queued: !!id && !delivered.has(id) });
+      out.push({ seq: e.seq, ts: e.ts, from: e.agent, to: String(e.data.to), text: shortAttachments(String(e.data.text ?? '')), kind: 'message', urgent: !!e.data.urgent, queued: !!id && !delivered.has(id) });
     } else if (e.type === 'agent.done') out.push({ seq: e.seq, ts: e.ts, from: e.agent, to: parentOf.get(e.agent) ?? 'human', text: String(e.data.note ?? ''), kind: 'done' });
   }
   return out;

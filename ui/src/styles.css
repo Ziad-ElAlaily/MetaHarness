@@ -1357,6 +1357,23 @@ details.more { display: grid; gap: 6px; }
 .composer-input { display: flex; gap: 8px; align-items: flex-end; }
 .composer-input textarea { flex: 1; resize: vertical; min-height: 40px; }
 
+/* Files in a message: dropped on the pane a composer sits in, then shown in what was sent. */
+.drop-here { outline: 2px dashed var(--accent); outline-offset: -3px; }
+.attach-area { display: grid; gap: 6px; }
+.attach-area > .attach-btn { justify-self: start; }
+.attach-btn { font-size: 15px; flex: none; }
+.composer .row .attach-btn { margin-left: 0; }
+.drafts { display: flex; flex-wrap: wrap; gap: 6px; }
+.assistant > .drafts { padding: 8px 12px 0; border-top: 1px solid var(--line); }
+.assistant > .drafts + .assistant-input { border-top: 0; }
+.draft { display: flex; gap: 6px; align-items: center; max-width: 100%; padding: 2px 2px 2px 6px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--panel-2); font-size: 12px; }
+.draft img { width: 32px; height: 32px; object-fit: cover; border-radius: 4px; }
+.draft-name { min-width: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.draft-error { flex-basis: 100%; }
+.attached { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; align-items: flex-end; }
+.attached-image { display: block; max-width: min(240px, 100%); max-height: 200px; border-radius: 7px; border: 1px solid var(--line); }
+.file-chip.plain { cursor: default; color: var(--text-2); }
+
 /* The makers, over the board. */
 .lens-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
 .lens-bar .kicker { margin: 0 4px 0 0; }
@@ -1683,6 +1700,7 @@ input.cast-name { width: 160px; font-size: 12.5px; }
   /* An agent, a file or a card opens over the whole screen. */
   .agent-drawer { position: fixed; inset: 0; z-index: 30; width: auto; height: auto; border-left: 0; box-shadow: none; padding-top: env(safe-area-inset-top); }
   .agent-drawer .composer, .assistant-input { padding-bottom: calc(10px + env(safe-area-inset-bottom)); }
+  .btn.attach-btn { min-width: 44px; min-height: 44px; }
   .drawer-head { padding: 4px 8px; }
   .assistant { top: 0; bottom: 0; left: 0; width: auto; border-left: 0; padding-top: env(safe-area-inset-top); }
   .assistant-head { flex-wrap: wrap; }

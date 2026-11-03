@@ -1,3 +1,4 @@
+import { Attached, shortAttachments } from '../components/Attachments.tsx';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { clock, eventKind, modelLabel, eventText, importance, oneLine, who } from '../format.ts';
 import type { Goal, MhEvent } from '../types.ts';
@@ -185,9 +186,13 @@ function Card({ e, name, onOpenFile }: { e: MhEvent; name: (n?: string) => React
             {d.urgent && <span className="pill urgent">urgent</span>}
             {t}
           </div>
-          <More lines={4}>
-            <Markdown text={String(d.text ?? '')} />
-          </More>
+          <Attached goal={e.goal} text={String(d.text ?? '')} onOpen={onOpenFile}>
+            {said => (
+              <More lines={4}>
+                <Markdown text={said} />
+              </More>
+            )}
+          </Attached>
         </div>
       );
     }
@@ -248,7 +253,7 @@ function Card({ e, name, onOpenFile }: { e: MhEvent; name: (n?: string) => React
       return (
         <div className="line you">
           {t} <b className="you">You</b> <span className="verb">{verb}</span> {name(e.agent)}
-          {d.reply ? <span>“{oneLine(d.reply, 300)}”</span> : null}
+          {d.reply ? <span>“{oneLine(shortAttachments(d.reply), 300)}”</span> : null}
           {d.why ? <span className="meta"> ({d.why})</span> : null}
         </div>
       );

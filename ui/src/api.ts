@@ -54,6 +54,13 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
+  /** Keeps a file in a goal's shared folder (or the assistant's), to name in a message. */
+  upload: async (goal: string, name: string, file: Blob) => {
+    const r = await fetch(`/upload?goal=${encodeURIComponent(goal)}&name=${encodeURIComponent(name)}`, { method: 'POST', headers: { authorization: `Bearer ${current}` }, body: file });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new ApiError(body.error ?? r.statusText, r.status);
+    return body as { path: string; abs: string; size: number };
+  },
   state: (goal?: string) => call<Snapshot>(`/state${goal ? `?goal=${encodeURIComponent(goal)}` : ''}`),
   goals: () => call<{ goals: GoalSummary[] }>('/goals').then(r => r.goals),
   agent: (goal: string, name: string) => call<AgentDetail>(`/agent?goal=${encodeURIComponent(goal)}&name=${encodeURIComponent(name)}`),

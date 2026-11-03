@@ -547,6 +547,7 @@ do, the CLI can do too, and vice versa.
 | `GET /browse?path&hidden` | The daemon's folders, one at a time, for Open folder: each says whether it's a git repository, has its own `.metaharness`, or is a project |
 | `GET /agent?goal=<id>&name=<agent>` | One agent in full: its system prompt, brief, folder, worktree and copied dependencies, native session, the command to open it by hand, its harness's manifest |
 | `POST /commands` | Every action a client can take, including `folder.*` and `share.*` (§23) |
+| `POST /upload?goal=<id>&name=<file>` | A file the human is attaching to a message; the body is its bytes (up to 100 MB). `goal` can be `assistant`. Kept in that goal's shared folder under `uploads/` (a room's under `room/uploads/`), never over another file, and returns where: `{ path, abs, size }` |
 
 The API listens on `localhost:7777` (configurable), and clients authenticate with a token
 stored in `~/.metaharness/token`, as a bearer header or `?token=` (for `EventSource`). The web
@@ -703,6 +704,35 @@ instead.
 Message any agent, the lead, or everyone (urgent messages interrupt) · pause, resume or stop an
 agent or the whole goal · spawn an agent yourself · take over as lead · approve or deny with a
 reply · open an agent's session in its native harness.
+
+### Files in a message
+
+Every place you write to an agent takes files: its conversation, **Message the team**, a room's
+chat, the assistant and answers to questions in the Inbox. The 📎 button opens the file picker (on
+a phone, the camera and gallery too), a file dropped anywhere on the pane attaches to that pane's
+composer, and a pasted screenshot attaches where you're typing.
+
+A message stays text (§1), so this works on every harness and survives a move to another model.
+The file goes in the shared folder when you send, not when you attach it, so one you take back
+leaves nothing behind. The message gets a line of its own saying where it is:
+
+```
+[Attached image: ~/.metaharness/goals/<id>/shared/uploads/shot.png (103 KB)]
+```
+
+The agent reads it with its usual tools; the shared folder is already readable on every harness.
+The app turns that line back into a picture or a chip wherever it shows the message, and into just
+the file's name in views with one line of room. Only whoever the message goes to hears of the file:
+it's left out of the shared folder's change notices, and credited to you in the log.
+
+**Big images.** An image an agent has looked at goes with every later call to its model, and a big
+one can hang the agent (§8: a 2.8 MB PNG did). A phone photo is well past that. So an image over
+1 MB or 1600 px also gets a smaller copy made in the browser (`<name>-small.jpg`, 1600 px), and the
+line points the agent at the copy and warns it off the original. If the browser can't read the
+image (HEIC in Chrome), the line says to make a smaller copy first.
+
+An SVG opened from `/media` runs sandboxed, like a demo page: an attachment can come from anywhere,
+and in a tab of its own it would otherwise run on the app's origin, with the token in reach.
 
 ### The assistant
 

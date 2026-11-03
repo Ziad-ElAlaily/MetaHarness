@@ -1,6 +1,8 @@
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { createHash } from 'node:crypto';
-import { extname, join, relative, sep } from 'node:path';
+import { copyFileSync, createWriteStream, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { dirname, extname, join, relative, sep } from 'node:path';
+import { Transform, type Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 /**
  * The shared folder's history (design §6). Agents write ordinary files; a scan every few seconds
@@ -15,6 +17,56 @@ const NOISE = /(^\.#|~$|\.sw[a-p]$|^\.DS_Store$|^#.*#$)/;
 
 /** Larger files are still reported, but not copied into the history. */
 const MAX_HISTORY_BYTES = 5 * 1024 * 1024;
+
+/** The largest file a chat attachment can be: agents read these, and every one stays on disk with the goal. */
+export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+
+/** A file name that's safe on disk and in the line an agent reads: no folders, no leading dot, no spaces or brackets. */
+export function uploadName(raw: string): string {
+  const base = raw.normalize('NFC').split(/[\\/]/).pop() ?? '';
+  const clean = base.replace(/[^\p{L}\p{N}._-]+/gu, '-').replace(/^[.-]+/, '').replace(/-+$/, '');
+  if (!clean) return 'file';
+  // Long names lose their middle, not their extension.
+  const ext = extname(clean).slice(0, 20);
+  return clean.length > 120 ? `${clean.slice(0, 120 - ext.length)}${ext}` : clean;
+}
+
+/**
+ * Keeps a file the human attached in `folder` under the shared folder, and never over another:
+ * shot.png, then shot-2.png. It appears there whole, so a scan never records half of it.
+ */
+export async function saveUpload(sharedDir: string, folder: string, name: string, body: Readable): Promise<{ path: string; abs: string; size: number }> {
+  const dir = join(sharedDir, folder);
+  mkdirSync(dir, { recursive: true });
+  // Beside the shared folder, not in it, on the same disk.
+  const tmp = join(dirname(sharedDir), `.upload-${randomUUID()}`);
+  let size = 0;
+  const count = new Transform({
+    transform(chunk: Buffer, _enc, done) {
+      size += chunk.length;
+      done(size > MAX_UPLOAD_BYTES ? new Error(uploadTooBig(size)) : null, chunk);
+    },
+  });
+  try {
+    await pipeline(body, count, createWriteStream(tmp));
+    const safe = uploadName(name);
+    const ext = extname(safe);
+    const stem = safe.slice(0, safe.length - ext.length);
+    for (let n = 1; ; n++) {
+      const file = n === 1 ? safe : `${stem}-${n}${ext}`;
+      try {
+        linkSync(tmp, join(dir, file));
+        return { path: `${folder}/${file}`, abs: join(dir, file), size };
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') throw e;
+      }
+    }
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+}
+
+export const uploadTooBig = (size: number) => `That file is too big to attach (${Math.ceil(size / 1024 / 1024)} MB; the limit is ${MAX_UPLOAD_BYTES / 1024 / 1024} MB). Put it in the project or the shared folder yourself, and say where.`;
 
 export interface SharedFile {
   size: number;

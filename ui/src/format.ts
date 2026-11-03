@@ -158,6 +158,8 @@ export function importance(e: MhEvent): 'key' | 'minor' | 'hidden' {
       // Decisions and questions show as the message that asked them; results as the done note.
       return e.data.kind === 'approval' ? 'key' : 'hidden';
     case 'shared.write':
+      // What you attached shows with the message it came in.
+      if (e.agent === 'human') return 'hidden';
       return e.data.version === 1 ? 'key' : 'minor';
     case 'agent.text': case 'agent.status': case 'agent.warning': case 'agent.tool_call': case 'approval.auto': case 'approval.refused': case 'approval.gatekeeper': case 'approval.lead_silent': case 'message.held': case 'agent.cache_expiring': case 'shared.delete':
     case 'agent.paused': case 'agent.resumed': case 'agent.paused_between_steps': case 'agent.interrupted': case 'account.limit': case 'agent.context_full':

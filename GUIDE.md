@@ -209,6 +209,11 @@ guidelines), **Behaviour** (rules, settings) and **Machine** (harnesses, tools a
   and they're copied into the new goal's shared folder under `imported/`, so deleting the old
   goal later loses nothing. The new lead gets the old goal's outcome and is told where the
   copies are. A room's whole board, design and chat are copied the same way.
+- **Files and images in a message:** anywhere you write to an agent (its conversation, **Message**,
+  a room's chat, **Ask**, an answer in the Inbox), click 📎, drop files on the pane, or paste a
+  screenshot. On a phone, 📎 offers the camera and your photos. Each file can be up to 100 MB. The
+  agent gets the file's path and reads it with its own tools; a big image also gets a smaller copy,
+  so looking at it doesn't bog the agent down. They aren't uploaded until you send.
 - **Rooms:** brainstorms for getting clear and deciding (below).
 - **Ask** (in the left rail, from any page): an assistant for questions about your goals and
   setup. It looks things up in the logs, shared files, costs and config. When you ask for a
@@ -601,7 +606,8 @@ Home, or a room's header): what to talk about, and the makers.
   tests run without installing. An agent that reinstalls only touches its copy.
 - **The shared folder** (`~/.metaharness/goals/<goal>/shared/`) holds designs, notes and
   reports. Every version of every file is kept in `shared/.history/`. When a teammate changes a
-  file, the others are told the next time anything reaches them.
+  file, the others are told the next time anything reaches them. Files you attach to messages go
+  in its `uploads/` folder, and only whoever you sent them to is told.
 - **Rate limits.** Near a subscription's limit, agents are asked to write notes. At the limit,
   they wait for a reset that's close, or move to a backup from their role's `fallback`, picking
   up from a handoff.

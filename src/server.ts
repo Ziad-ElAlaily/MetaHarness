@@ -4,6 +4,7 @@ import { extname, join, normalize, sep } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import type { Daemon } from './daemon.ts';
 import { handleMcp } from './mcp.ts';
+import { MAX_UPLOAD_BYTES, uploadTooBig } from './shared.ts';
 import type { MhEvent } from './types.ts';
 
 /**
@@ -80,7 +81,8 @@ async function handle(d: Daemon, token: string, req: IncomingMessage, res: Serve
       const m = d.roomMedia(goal, path, raw ? (JSON.parse(raw) as Record<string, number>) : undefined);
       res.writeHead(200, {
         'content-type': m.type, 'cache-control': 'no-cache',
-        ...(m.type.startsWith('text/html') ? { 'content-security-policy': 'sandbox allow-scripts' } : {}),
+        // An SVG opened in a tab runs its scripts too, and it may be a file from anywhere.
+        ...(m.type.startsWith('text/html') || m.type === 'image/svg+xml' ? { 'content-security-policy': 'sandbox allow-scripts' } : {}),
       });
       return void res.end(m.body);
     }
@@ -116,6 +118,15 @@ async function handle(d: Daemon, token: string, req: IncomingMessage, res: Serve
       const from = q('from'), to = q('to');
       if (!from || !to) throw new Error('GET /design/compare needs &from=<commit>&to=<commit>.');
       return json(res, 200, await d.designCompare(goalOf(), from, to));
+    }
+    // A file the human attached to a message: the bytes are the body. It's kept in the shared
+    // folder, and the message names it (design §14).
+    if (req.method === 'POST' && url.pathname === '/upload') {
+      const goal = url.searchParams.get('goal'), name = url.searchParams.get('name');
+      if (!goal || !name) return json(res, 400, { error: 'POST /upload needs ?goal=<id>&name=<file name>.' });
+      const length = Number(req.headers['content-length']);
+      if (length > MAX_UPLOAD_BYTES) return json(res, 413, { error: uploadTooBig(length) });
+      return json(res, 200, await d.upload(goal, name, req));
     }
     if (req.method === 'POST' && url.pathname === '/commands') {
       const body = await readBody(req);

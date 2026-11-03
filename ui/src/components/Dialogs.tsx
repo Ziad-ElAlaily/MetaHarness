@@ -1,3 +1,4 @@
+import { AttachButton, Drafts, useAttachments, withAttachments } from './Attachments.tsx';
 import { useEffect, useState } from 'react';
 import { api } from '../api.ts';
 import type { ConfigView, Goal } from '../types.ts';
@@ -269,8 +270,11 @@ export function MessageDialog({ goal, initial = '', onClose, onSend }: { goal: G
   const [to, setTo] = useState('lead');
   const [text, setText] = useState(initial);
   const [urgent, setUrgent] = useState(false);
+  const attachments = useAttachments(goal.id);
   const send = async () => {
-    if (text.trim() && (await onSend({ cmd: 'agent.message', goal: goal.id, to, text: text.trim(), urgent }))) onClose();
+    if (!text.trim() && !attachments.drafts.length) return;
+    const lines = await attachments.upload();
+    if (lines && (await onSend({ cmd: 'agent.message', goal: goal.id, to, text: withAttachments(text, lines), urgent }))) onClose();
   };
   return (
     <Dialog title="Message the team" onClose={onClose} wide>
@@ -294,14 +298,18 @@ export function MessageDialog({ goal, initial = '', onClose, onSend }: { goal: G
           </optgroup>
         </select>
       </Field>
-      <textarea autoFocus rows={5} value={text} onChange={e => setText(e.target.value)} onKeyDown={e => e.key === 'Enter' && (e.ctrlKey || e.metaKey) && void send()} placeholder="A new requirement, an answer, a change of plan…" aria-label="Message" />
+      <div className="attach-area" ref={attachments.zone} onPaste={attachments.onPaste}>
+        <textarea autoFocus rows={5} value={text} onChange={e => setText(e.target.value)} onKeyDown={e => e.key === 'Enter' && (e.ctrlKey || e.metaKey) && void send()} placeholder="A new requirement, an answer, a change of plan…" aria-label="Message" />
+        <Drafts a={attachments} />
+        <AttachButton a={attachments} />
+      </div>
       <Toggle checked={urgent} onChange={setUrgent} label="Urgent" hint="Pauses their turn after the current step to deliver it now, instead of at the next natural break." />
       <div className="row">
         <button className="btn" onClick={onClose}>
           Cancel
         </button>
-        <button className="btn primary" disabled={!text.trim()} onClick={() => void send()}>
-          Send
+        <button className="btn primary" disabled={(!text.trim() && !attachments.drafts.length) || attachments.busy} onClick={() => void send()}>
+          {attachments.busy ? 'Uploading…' : 'Send'}
         </button>
       </div>
     </Dialog>

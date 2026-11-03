@@ -5,6 +5,7 @@ import { money } from '../format.ts';
 import type { MhEvent } from '../types.ts';
 import { Markdown } from './common.tsx';
 import { Splitter } from './Splitter.tsx';
+import { AttachButton, Attached, Drafts, useAttachments, withAttachments } from './Attachments.tsx';
 
 interface Choice {
   harness?: string;
@@ -90,11 +91,15 @@ export function AssistantPanel({ open, context, project, onClose, onApplied }: {
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight });
   }, [conv.length, busy]);
 
+  const attachments = useAttachments('assistant');
   const ask = async (q = text) => {
-    if (!q.trim()) return;
+    if (!q.trim() && !attachments.drafts.length) return;
+    const lines = await attachments.upload();
+    if (!lines) return;
     setText('');
+    attachments.clear();
     try {
-      await api.command({ cmd: 'assistant.ask', text: q.trim(), context, ...(project ? { project } : {}) });
+      await api.command({ cmd: 'assistant.ask', text: withAttachments(q, lines), context, ...(project ? { project } : {}) });
     } catch (e) {
       setFailed((e as Error).message);
     }
@@ -183,7 +188,7 @@ export function AssistantPanel({ open, context, project, onClose, onApplied }: {
             case 'assistant.asked':
               return (
                 <div key={e.seq} className="bubble you">
-                  {String(d.text)}
+                  <Attached goal="assistant" text={String(d.text)}>{said => said}</Attached>
                 </div>
               );
             case 'assistant.text':
@@ -249,7 +254,9 @@ export function AssistantPanel({ open, context, project, onClose, onApplied }: {
         {failed && <div className="warn-text small">{failed}</div>}
       </div>
 
-      <div className="assistant-input">
+      <Drafts a={attachments} />
+      <div className="assistant-input" ref={attachments.zone} onPaste={attachments.onPaste}>
+        <AttachButton a={attachments} />
         <textarea
           rows={2}
           value={text}
@@ -263,8 +270,8 @@ export function AssistantPanel({ open, context, project, onClose, onApplied }: {
             }
           }}
         />
-        <button className="btn primary small" disabled={!text.trim()} onClick={() => void ask()}>
-          Ask
+        <button className="btn primary small" disabled={(!text.trim() && !attachments.drafts.length) || attachments.busy} onClick={() => void ask()}>
+          {attachments.busy ? 'Uploading…' : 'Ask'}
         </button>
       </div>
     </aside>

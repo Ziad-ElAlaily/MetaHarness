@@ -3,6 +3,7 @@ import { isPhone } from '../phone.ts';
 import { ago } from '../format.ts';
 import type { InboxItem } from '../types.ts';
 import { Markdown, More } from './common.tsx';
+import { AttachButton, Drafts, useAttachments, withAttachments } from './Attachments.tsx';
 
 type Resolve = (item: string, decision: 'approve' | 'deny' | 'dismiss', reply?: string) => void;
 
@@ -67,6 +68,15 @@ export function InboxCard({ item, onResolve, onSelectAgent, goalLabel, compact }
   const [reply, setReply] = useState('');
   const [replying, setReplying] = useState(false);
   const r = reply.trim() || undefined;
+  const attachments = useAttachments(item.goal);
+  /** An answer to a question, with what's attached to it. */
+  const answer = async () => {
+    const lines = await attachments.upload();
+    if (!lines) return;
+    onResolve(item.id, 'dismiss', withAttachments(reply, lines));
+    attachments.clear();
+  };
+  const hasAnswer = (!!r || attachments.drafts.length > 0) && !attachments.busy;
   return (
     <div className={`inbox-item ${item.kind}${compact ? ' compact' : ''}`}>
       <div className="head">
@@ -114,23 +124,25 @@ export function InboxCard({ item, onResolve, onSelectAgent, goalLabel, compact }
         </>
       )}
       {(item.kind === 'question' || item.kind === 'stalled') && (
-        <>
+        <div className="attach-area" ref={attachments.zone} onPaste={attachments.onPaste}>
           <textarea
             rows={2}
             placeholder={(item.kind === 'stalled' ? `A message to ${item.agent}` : 'Your answer') + (isPhone() ? '' : ' (Ctrl+Enter to send)')}
             value={reply}
             onChange={e => setReply(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && (e.ctrlKey || e.metaKey) && r && onResolve(item.id, 'dismiss', r)}
+            onKeyDown={e => e.key === 'Enter' && (e.ctrlKey || e.metaKey) && hasAnswer && void answer()}
           />
+          <Drafts a={attachments} />
           <div className="actions">
-            <button className="btn primary small" disabled={!r} onClick={() => onResolve(item.id, 'dismiss', r)}>
-              {item.kind === 'stalled' ? 'Send' : 'Answer'}
+            <button className="btn primary small" disabled={!hasAnswer} onClick={() => void answer()}>
+              {attachments.busy ? 'Uploading…' : item.kind === 'stalled' ? 'Send' : 'Answer'}
             </button>
+            <AttachButton a={attachments} />
             <button className="btn ghost small" onClick={() => onResolve(item.id, 'dismiss')}>
               Dismiss
             </button>
           </div>
-        </>
+        </div>
       )}
       {!ACTIONABLE.includes(item.kind) && (
         <>

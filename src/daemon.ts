@@ -2,6 +2,7 @@ import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readF
 import { spawn } from 'node:child_process';
 import { basename, dirname, extname, isAbsolute, join, normalize, relative, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
+import type { Readable } from 'node:stream';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { EventStore } from './store.ts';
 import { loadConfig, workflowRoleNames, type Config } from './config.ts';
@@ -19,7 +20,7 @@ import type { ApprovalMode } from './settings.ts';
 import { MCP_SERVER_NAME } from './mcp.ts';
 import { pathsOutside, readOnlyCommand } from './readonly.ts';
 import { goalOver, INTERRUPTED, replayGoal, type AgentReplay, type GoalReplay } from './recover.ts';
-import { HISTORY, SharedFolder } from './shared.ts';
+import { HISTORY, saveUpload, SharedFolder } from './shared.ts';
 import { cleanGoal, describeClean, type CleanResult } from './clean.ts';
 import { authorsDir, deniedCommandPrefixes, guardEnv, installGuard, readAuthors, refusedGitCommand, removeAuthors } from './guard.ts';
 import { MAP_FILE, compareDesigns, designReport, type DesignReport, type SnapshotInfo } from './design.ts';
@@ -396,6 +397,9 @@ const GIT_COMMITS = /\bgit\b[^|;&\n]*?\s(?:commit|merge|cherry-pick|revert|pull|
 const GIT_ACTOR_MS = 120_000;
 
 /** What GET /media serves from a room's folder: images, and demo pages. */
+/** Files the human attached to messages, in a shared folder. */
+const UPLOADS = /^(room\/)?uploads\//;
+
 const MEDIA_TYPES: Record<string, string> = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
   '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8',
@@ -482,7 +486,7 @@ export class Daemon {
       start: (brief, events) => {
         assistantSpent = 0;
         const role = this.assistantRole();
-        const place = { id: ASSISTANT_STREAM, dir: this.assistantDir(), sharedDir: join(this.home, 'assistant', 'shared') };
+        const place = { id: ASSISTANT_STREAM, dir: this.assistantDir(), sharedDir: this.assistantShared() };
         this.assistantIn = place.dir;
         return this.startSideSession(ASSISTANT, role, place, brief, events, 'Use the MetaHarness tools.', r => {
           assistantRoute = r;
@@ -2314,7 +2318,8 @@ export class Daemon {
   private sharedChanged(g: GoalRec, c: import('./shared.ts').SharedChange): void {
     // A room's canvas and chat change with every word: the room shows them, and agents read them when they need to.
     if (g.room && (c.path === 'room/canvas.md' || c.path === 'room/chat.md')) return;
-    const by = this.sharedWriter(g, c.path);
+    // What no agent wrote in the uploads folder, the human attached.
+    const by = this.sharedWriter(g, c.path) ?? (UPLOADS.test(c.path) && !c.deleted ? 'human' : undefined);
     const at = Date.now();
     let clash: FileNote['clash'];
     if (c.deleted) {
@@ -2331,6 +2336,8 @@ export class Daemon {
     }
     // A room's images and demos are on its board, where the lead hears of them.
     if (g.room && /^room\/(media|demos)\//.test(c.path)) return;
+    // What the human attached is for whoever the message goes to, and the message names it.
+    if (UPLOADS.test(c.path)) return;
     for (const a of g.agents.values()) {
       if (a.quick || FINISHED.includes(a.state)) continue;
       if (a.name === by && !clash) continue;
@@ -4215,8 +4222,8 @@ export class Daemon {
    * from where their log says.
    */
   roomMedia(goalId: string, path: string, values?: Record<string, number>): { type: string; body: Buffer | string } {
-    if (!/^[0-9a-f-]+$/i.test(goalId)) throw new Error(`There's no room ${goalId}.`);
-    const dir = this.goals.get(goalId)?.sharedDir ?? join(this.home, 'goals', goalId, 'shared');
+    if (goalId !== ASSISTANT_STREAM && !/^[0-9a-f-]+$/i.test(goalId)) throw new Error(`There's no room ${goalId}.`);
+    const dir = goalId === ASSISTANT_STREAM ? this.assistantShared() : (this.goals.get(goalId)?.sharedDir ?? join(this.home, 'goals', goalId, 'shared'));
     const rel = sharedPath(dir, path);
     const ext = extname(path).toLowerCase();
     const type = MEDIA_TYPES[ext];
@@ -4225,6 +4232,24 @@ export class Daemon {
     if (!existsSync(file) || !statSync(file).isFile()) throw new Error(`There's no ${rel} in the room's folder.`);
     if (ext === '.html' || ext === '.htm') return { type, body: demoPage(readFileSync(file, 'utf8'), values) };
     return { type, body: readFileSync(file) };
+  }
+
+  /**
+   * Keeps a file the human is attaching to a message, in the shared folder of the goal it's for
+   * (or the assistant's). A room's go under room/, which a goal started from it carries along.
+   */
+  async upload(goalId: string, name: string, body: Readable): Promise<{ path: string; abs: string; size: number }> {
+    if (goalId === ASSISTANT_STREAM) return saveUpload(this.assistantShared(), 'uploads', name, body);
+    const g = this.goals.get(goalId);
+    if (!g) throw new Error(`There's no goal ${goalId} running here to attach a file to.`);
+    const saved = await saveUpload(g.sharedDir, g.room ? 'room/uploads' : 'uploads', name, body);
+    // Logged before the message that names it arrives, not at the next scan.
+    this.refreshShared(g.id);
+    return saved;
+  }
+
+  private assistantShared(): string {
+    return join(this.home, 'assistant', 'shared');
   }
 
   /* ---------------- restart recovery ---------------- */

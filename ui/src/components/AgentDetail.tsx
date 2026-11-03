@@ -3,6 +3,7 @@ import { api } from '../api.ts';
 import { BUSY, clock, modelLabel, isOwnTool, money, oneLine, ruleLine, skillLine, STATE_LABEL, GATE } from '../format.ts';
 import type { Agent, AgentDetail as Detail, Goal, Manifest, MhEvent } from '../types.ts';
 import { CopyText, Ctx, Dialog, Dot, Markdown, More, useConfirm, CacheClock } from './common.tsx';
+import { AttachButton, Attached, Drafts, useAttachments, withAttachments } from './Attachments.tsx';
 import type { GitSel } from '../views/Git.tsx';
 
 type Item =
@@ -192,11 +193,16 @@ export function AgentDetail({ goal, agent, events, manifest, onCommand, onSpawnU
   const canMessage = goalLive && !gone;
   const lastProblem = useMemo(() => [...events].reverse().find(e => e.agent === agent.name && ['agent.crashed', 'agent.ended'].includes(e.type)), [events, agent.name]);
 
+  const attachments = useAttachments(goal.id);
   const send = async () => {
-    if (!text.trim()) return;
-    await onCommand({ cmd: 'agent.message', goal: goal.id, to: agent.name, text: text.trim(), urgent });
+    if (!text.trim() && !attachments.drafts.length) return;
+    const lines = await attachments.upload();
+    if (!lines) return;
+    // Refused, what you wrote and attached stays here to send again.
+    if (!(await onCommand({ cmd: 'agent.message', goal: goal.id, to: agent.name, text: withAttachments(text, lines), urgent }))) return;
     setText('');
     setUrgent(false);
+    attachments.clear();
   };
 
   return (
@@ -305,7 +311,7 @@ export function AgentDetail({ goal, agent, events, manifest, onCommand, onSpawnU
       >
         {tab === 'talk' && (
           <div className="stream">
-            {rows.map(r => (r.kind === 'steps' ? <StepRun key={`s${r.id}`} items={r.items} /> : <StreamItem key={r.item.seq} item={r.item} />))}
+            {rows.map(r => (r.kind === 'steps' ? <StepRun key={`s${r.id}`} items={r.items} goal={goal.id} onOpenFile={onOpenFile} /> : <StreamItem key={r.item.seq} item={r.item} goal={goal.id} onOpenFile={onOpenFile} />))}
             {!rows.length && <div className="empty">Nothing yet.</div>}
           </div>
         )}
@@ -367,7 +373,8 @@ export function AgentDetail({ goal, agent, events, manifest, onCommand, onSpawnU
       </div>
 
       {canMessage && (
-        <div className="composer">
+        <div className="composer" ref={attachments.zone} onPaste={attachments.onPaste}>
+          <Drafts a={attachments} />
           <textarea
             rows={2}
             placeholder={`Message ${agent.name}${paused ? ' (it reads it when you resume it)' : agent.state === 'done' ? ' (it picks up again to answer)' : ''}…`}
@@ -378,12 +385,13 @@ export function AgentDetail({ goal, agent, events, manifest, onCommand, onSpawnU
             }}
           />
           <div className="row">
+            <AttachButton a={attachments} />
             <label className="check" title="Pauses its turn after the current step to deliver this now">
               <input type="checkbox" checked={urgent} onChange={e => setUrgent(e.target.checked)} /> Urgent
             </label>
             <span className="muted kbd-hint">Ctrl+Enter</span>
-            <button className="btn primary small" disabled={!text.trim()} onClick={() => void send()}>
-              Send
+            <button className="btn primary small" disabled={(!text.trim() && !attachments.drafts.length) || attachments.busy} onClick={() => void send()}>
+              {attachments.busy ? 'Uploading…' : 'Send'}
             </button>
           </div>
         </div>
@@ -446,7 +454,7 @@ function Now({ agent, problem }: { agent: Agent; problem?: MhEvent }) {
   );
 }
 
-function StepRun({ items }: { items: Item[] }) {
+function StepRun({ items, goal, onOpenFile }: { items: Item[]; goal: string; onOpenFile?: (path: string) => void }) {
   const [open, setOpen] = useState(false);
   const tools = items.filter(i => i.kind === 'tool').length;
   const failed = items.some(i => i.kind === 'tool' && i.ok === false);
@@ -464,7 +472,7 @@ function StepRun({ items }: { items: Item[] }) {
       {open && (
         <div className="steps-body">
           {items.map(i => (
-            <StreamItem key={i.seq} item={i} />
+            <StreamItem key={i.seq} item={i} goal={goal} onOpenFile={onOpenFile} />
           ))}
         </div>
       )}
@@ -472,7 +480,7 @@ function StepRun({ items }: { items: Item[] }) {
   );
 }
 
-function StreamItem({ item }: { item: Item }) {
+function StreamItem({ item, goal, onOpenFile }: { item: Item; goal: string; onOpenFile?: (path: string) => void }) {
   switch (item.kind) {
     case 'say':
       return (
@@ -499,9 +507,13 @@ function StreamItem({ item }: { item: Item }) {
             {item.decision ? ' · decision' : ''}
             {item.urgent ? ' · urgent' : ''} · {clock(item.ts)}
           </div>
-          <More lines={5}>
-            <Markdown text={item.text} />
-          </More>
+          <Attached goal={goal} text={item.text} onOpen={onOpenFile}>
+            {said => (
+              <More lines={5}>
+                <Markdown text={said} />
+              </More>
+            )}
+          </Attached>
         </div>
       );
     case 'tool':

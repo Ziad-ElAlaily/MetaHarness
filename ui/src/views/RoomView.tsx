@@ -1,3 +1,4 @@
+import { AttachButton, Attached, Drafts, shortAttachments, useAttachments, withAttachments } from '../components/Attachments.tsx';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { Agent, CanvasCard, ConfigView, Goal, Lens, MhEvent } from '../types.ts';
 import { lensWhat, responsibilityLabel, type RoomMsg, type RoomView as Room } from '../roomData.ts';
@@ -179,7 +180,7 @@ function Chat({ goal, room, who, files, live, lead, onCard }: { goal: Goal; room
         {room.from && <div className="muted small">Carried over from {room.from}: see the board.</div>}
       </div>
       {room.messages.map(m => (
-        <Message key={m.id} m={m} room={room} who={who} files={files} onCard={onCard} />
+        <Message key={m.id} goal={goal.id} m={m} room={room} who={who} files={files} onCard={onCard} />
       ))}
       {live && busy(lead) && (
         <div className="chat-typing">
@@ -210,7 +211,7 @@ function FileChips({ text, files }: { text: string; files: FileLinks }) {
   );
 }
 
-function Message({ m, room, who, files, onCard }: { m: RoomMsg; room: Room; who: (n: string) => ReactNode; files: FileLinks; onCard: (id: string) => void }) {
+function Message({ goal, m, room, who, files, onCard }: { goal: string; m: RoomMsg; room: Room; who: (n: string) => ReactNode; files: FileLinks; onCard: (id: string) => void }) {
   const [open, setOpen] = useState(false);
   if (m.kind === 'note') return <div className="thread-note">{oneLine(m.text, 600)}</div>;
   if (m.kind === 'ask') {
@@ -222,7 +223,9 @@ function Message({ m, room, who, files, onCard }: { m: RoomMsg; room: Room; who:
             {card ? `${m.card} · ${oneLine(card.title, 50)}` : m.card}
           </button>
         )}
-        <Markdown text={m.text} />
+        <Attached goal={goal} text={m.text} onOpen={files.open}>
+          {said => <Markdown text={said} />}
+        </Attached>
         <span className="t meta">{clock(m.ts)}</span>
       </div>
     );
@@ -257,12 +260,12 @@ function Message({ m, room, who, files, onCard }: { m: RoomMsg; room: Room; who:
         </>
       )}
       <button className="chat-line-text" onClick={() => setOpen(o => !o)} aria-expanded={open} title={open ? 'Fold' : 'Read all of it'}>
-        {oneLine(m.text, 140)}
+        {oneLine(shortAttachments(m.text), 140)}
       </button>
       <span className="t meta">{clock(m.ts)}</span>
       {open && (
         <div className="quote">
-          <Markdown text={m.text} files={files} />
+          <Markdown text={shortAttachments(m.text)} files={files} />
         </div>
       )}
       <FileChips text={m.text} files={files} />
@@ -278,18 +281,21 @@ function Composer({ goal, room, about, onClearAbout, onCommand }: { goal: Goal; 
   useEffect(() => {
     if (about) ref.current?.focus();
   }, [about]);
+  const attachments = useAttachments(goal.id);
   const send = async () => {
-    if (!text.trim() || sending) return;
+    if ((!text.trim() && !attachments.drafts.length) || sending) return;
     setSending(true);
-    const r = await onCommand({ cmd: 'room.post', goal: goal.id, text: text.trim(), ...(about ? { card: about } : {}) });
+    const lines = await attachments.upload();
+    const r = lines && (await onCommand({ cmd: 'room.post', goal: goal.id, text: withAttachments(text, lines), ...(about ? { card: about } : {}) }));
     setSending(false);
     if (r) {
       setText('');
+      attachments.clear();
       onClearAbout();
     }
   };
   return (
-    <div className="composer">
+    <div className="composer" ref={attachments.zone} onPaste={attachments.onPaste}>
       {card && (
         <div className="composer-about">
           About <span className="card-chip">{card.id} · {oneLine(card.title, 60)}</span>
@@ -298,7 +304,9 @@ function Composer({ goal, room, about, onClearAbout, onCommand }: { goal: Goal; 
           </button>
         </div>
       )}
+      <Drafts a={attachments} />
       <div className="composer-input">
+        <AttachButton a={attachments} />
         <textarea
           ref={ref}
           rows={2}
@@ -314,8 +322,8 @@ function Composer({ goal, room, about, onClearAbout, onCommand }: { goal: Goal; 
           placeholder={card ? `What about ${card.id}?` : `Talk it through with ${goal.lead || 'the lead'}…`}
           aria-label="Message to the lead"
         />
-        <button className="btn primary" disabled={!text.trim() || sending} onClick={() => void send()} title="Enter sends, Shift+Enter starts a new line">
-          Send
+        <button className="btn primary" disabled={(!text.trim() && !attachments.drafts.length) || sending} onClick={() => void send()} title="Enter sends, Shift+Enter starts a new line">
+          {attachments.busy ? 'Uploading…' : 'Send'}
         </button>
       </div>
     </div>
