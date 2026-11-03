@@ -9,6 +9,7 @@ import { agentColors } from '../agentColors.ts';
 import { FileSide } from './Files.tsx';
 import { fileMentions, filesNamed, type FileLinks } from '../fileLinks.tsx';
 import { Board } from './Board.tsx';
+import { isPhone, useBackCloses, useIsPhone } from '../phone.ts';
 
 interface Props {
   goal: Goal;
@@ -39,6 +40,13 @@ export default function RoomView({ goal, events, room, config, onCommand, onSele
   const live = goal.live && goal.status !== 'ended';
   const color = useMemo(() => agentColors(goal), [goal]);
   const [about, setAbout] = useState<string>();
+  // On a phone the chat and the board take turns; a file or a card to talk about is in the chat's place.
+  const phone = useIsPhone();
+  const [pane, setPane] = useState<'chat' | 'board'>('chat');
+  useEffect(() => {
+    if (file || about) setPane('chat');
+  }, [file, about]);
+  useBackCloses(!!file, () => onFile(undefined));
   const fileRe = useMemo(() => fileMentions(events, goal.sharedDir), [events, goal.sharedDir]);
   const files: FileLinks = { re: fileRe, open: onFile };
   const lead = goal.agents.find(a => a.name === goal.lead);
@@ -66,7 +74,18 @@ export default function RoomView({ goal, events, room, config, onCommand, onSele
     );
 
   return (
-    <div className="room-wrap">
+    <>
+    {phone && (
+      <div className="room-panes seg" role="group" aria-label="Show">
+        <button className={pane === 'chat' ? 'on' : ''} onClick={() => setPane('chat')}>
+          Chat
+        </button>
+        <button className={pane === 'board' ? 'on' : ''} onClick={() => setPane('board')}>
+          Board{room.cards.length > 0 && ` · ${room.cards.length}`}
+        </button>
+      </div>
+    )}
+    <div className={`room-wrap pane-${pane}`}>
       <div className="room-chat">
         {file ? (
           <>
@@ -111,6 +130,7 @@ export default function RoomView({ goal, events, room, config, onCommand, onSele
         <Board goal={goal} room={room} live={live} color={color} files={files} onCommand={onCommand} onAskLead={setAbout} onBranch={ids => onBranch(room.cards.filter(c => ids.includes(c.id)))} onRoom={onRoom} />
       </div>
     </div>
+    </>
   );
 }
 
@@ -285,7 +305,8 @@ function Composer({ goal, room, about, onClearAbout, onCommand }: { goal: Goal; 
           value={text}
           onChange={e => setText(e.target.value)}
           onKeyDown={e => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+            // A phone's keyboard has no Shift+Enter: there Enter starts a new line, and the button sends.
+            if (e.key === 'Enter' && !e.shiftKey && !isPhone()) {
               e.preventDefault();
               void send();
             }

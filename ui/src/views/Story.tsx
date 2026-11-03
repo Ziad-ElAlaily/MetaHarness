@@ -44,10 +44,10 @@ export function Story({ goal, events, onSelectAgent, onOpenFile }: Props) {
   const [expandAll, setExpandAll] = useState(false);
   const entries = useMemo(() => storyOf(events, agent || undefined), [events, agent]);
   const scroller = useRef<HTMLDivElement>(null);
-  const bottom = useRef<HTMLDivElement>(null);
   const [stuck, setStuck] = useState(true);
   useEffect(() => {
-    if (stuck) bottom.current?.scrollIntoView({ block: 'end' });
+    // Not scrollIntoView: that scrolls the panes around this one as well.
+    if (stuck && scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
   }, [entries.length, stuck, entries.at(-1)]);
 
   const name = (n: string | undefined) =>
@@ -85,7 +85,6 @@ export function Story({ goal, events, onSelectAgent, onOpenFile }: Props) {
       >
         {entries.map(en => (en.kind === 'steps' ? <Steps key={`s${en.id}`} events={en.events} open={expandAll} onSelectAgent={onSelectAgent} /> : <Card key={en.e.seq} e={en.e} name={name} onOpenFile={onOpenFile} />))}
         {!entries.length && <div className="empty">Nothing has happened yet.</div>}
-        <div ref={bottom} />
       </div>
       {!stuck && (
         <button className="jump" onClick={() => setStuck(true)}>

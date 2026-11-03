@@ -4,6 +4,7 @@ import { ago, who } from '../format.ts';
 import type { Goal, MhEvent, SharedFileView } from '../types.ts';
 import { CopyText, Markdown } from '../components/common.tsx';
 import { Splitter } from '../components/Splitter.tsx';
+import { useBackCloses } from '../phone.ts';
 
 export interface FileInfo {
   path: string;
@@ -40,11 +41,12 @@ export function filesOf(events: MhEvent[]): FileInfo[] {
   return [...files.values()].sort((a, b) => a.path.localeCompare(b.path));
 }
 
-export function Files({ goal, events, selected, onSelect, onSelectAgent, onGoalFrom }: { goal: Goal; events: MhEvent[]; selected?: string; onSelect: (path: string) => void; onSelectAgent: (n: string) => void; onGoalFrom?: (path: string) => void }) {
+export function Files({ goal, events, selected, onSelect, onSelectAgent, onGoalFrom }: { goal: Goal; events: MhEvent[]; selected?: string; onSelect: (path?: string) => void; onSelectAgent: (n: string) => void; onGoalFrom?: (path: string) => void }) {
   const files = useMemo(() => filesOf(events), [events]);
   const current = files.find(f => f.path === selected) ?? files.find(f => !f.deleted && /report|design/i.test(f.path)) ?? files[0];
+  useBackCloses(!!selected, () => onSelect(undefined));
   return (
-    <div className="files">
+    <div className={`files${selected ? ' file-open' : ''}`}>
       <div className="file-list">
         <div className="file-list-head">
           <span className="muted">shared/</span>
@@ -62,7 +64,12 @@ export function Files({ goal, events, selected, onSelect, onSelectAgent, onGoalF
         {!files.length && <div className="empty">Nobody has written to the shared folder yet. Designs, reviews and reports land here.</div>}
       </div>
       <Splitter pane="files" grow="right" min={160} max={700} label="File list" />
-      <div className="file-view">{current ? <Viewer key={current.path} goal={goal} file={current} onSelectAgent={onSelectAgent} onGoalFrom={onGoalFrom} /> : <div className="empty">Pick a file.</div>}</div>
+      <div className="file-view">
+        <button className="btn ghost small file-back" onClick={() => onSelect(undefined)}>
+          ← Files
+        </button>
+        {current ? <Viewer key={current.path} goal={goal} file={current} onSelectAgent={onSelectAgent} onGoalFrom={onGoalFrom} /> : <div className="empty">Pick a file.</div>}
+      </div>
     </div>
   );
 }

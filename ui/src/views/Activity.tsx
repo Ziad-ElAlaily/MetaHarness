@@ -13,7 +13,6 @@ const KINDS = [
 export function Activity({ events, agents, onSelectAgent }: { events: MhEvent[]; agents: string[]; onSelectAgent: (name: string) => void }) {
   const [who, setWho] = useState('');
   const [kind, setKind] = useState<(typeof KINDS)[number][0]>('all');
-  const bottom = useRef<HTMLDivElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
 
@@ -35,7 +34,8 @@ export function Activity({ events, agents, onSelectAgent }: { events: MhEvent[];
     [events, who, kind],
   );
   useEffect(() => {
-    if (stick.current) bottom.current?.scrollIntoView({ block: 'end' });
+    // Not scrollIntoView: that scrolls the panes around this one as well.
+    if (stick.current && scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
   }, [lines.length]);
 
   return (
@@ -78,7 +78,6 @@ export function Activity({ events, agents, onSelectAgent }: { events: MhEvent[];
           </div>
         ))}
         {!lines.length && <div className="empty">Nothing to show yet.</div>}
-        <div ref={bottom} />
       </div>
     </>
   );

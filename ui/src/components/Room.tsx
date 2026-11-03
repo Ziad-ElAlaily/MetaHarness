@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ConfigView, Goal, GoalSummary, Lens, MhEvent, Snapshot } from '../types.ts';
 import { ago, duration, money } from '../format.ts';
-import { Dialog, Field, Toggle, useConfirm } from './common.tsx';
+import { Dialog, Field, HeaderActions, Toggle, useConfirm } from './common.tsx';
+import { useIsPhone } from '../phone.ts';
 import { AccountChips, harnessOf } from './Accounts.tsx';
 import { EFFORTS, type RoomView } from '../roomData.ts';
 
@@ -287,29 +288,35 @@ export function RoomHeader({ rooms, goal, room, events, snapshot, connected, onG
   const took = live ? `open ${duration(goal.createdAt)}` : end ? `took ${duration(goal.createdAt, new Date(end.ts).getTime())}` : `started ${ago(goal.createdAt)}`;
   const hasDesign = events.some(e => e.type === 'shared.write' && e.data.path === 'room/design.md');
   const shared = goal.sharedDir.endsWith('/') ? goal.sharedDir : `${goal.sharedDir}/`;
+  const phone = useIsPhone();
+  const meta = (
+    <div className="goal-meta">
+        <span className={`pill ${live ? 'running' : 'ended'}`}>{live ? 'open' : 'ended'}</span>
+        <span>{took}</span>
+        {goal.cost != null && <span title="Cost reported by the harnesses: the lead and its makers">{money(goal.cost)}</span>}
+        <span>
+          {room.lenses.length} maker{room.lenses.length === 1 ? '' : 's'} · {room.cards.length} card{room.cards.length === 1 ? '' : 's'}
+        </span>
+        {live && snapshot && <AccountChips accounts={snapshot.accounts.filter(a => agents.some(x => x.harness === harnessOf(a.id)))} />}
+        {!connected && goal.live && <span className="warn-text">reconnecting…</span>}
+        {goal.notice && (
+          <span className="help-dot" title={goal.notice}>
+            i
+          </span>
+        )}
+    </div>
+  );
   return (
     <header className="goal-header compact">
       <div className="goal-title-row">
-        <button className="btn primary new-btn" onClick={onNewRoom} title="Open another room">
-          + New room
-        </button>
+        {!phone && (
+          <button className="btn primary new-btn" onClick={onNewRoom} title="Open another room">
+            + New room
+          </button>
+        )}
         <RoomSwitcher rooms={rooms} goal={goal} onGoal={onGoal} onNewRoom={onNewRoom} onAllRooms={onAllRooms} />
-        <div className="goal-meta">
-          <span className={`pill ${live ? 'running' : 'ended'}`}>{live ? 'open' : 'ended'}</span>
-          <span>{took}</span>
-          {goal.cost != null && <span title="Cost reported by the harnesses: the lead and its makers">{money(goal.cost)}</span>}
-          <span>
-            {room.lenses.length} maker{room.lenses.length === 1 ? '' : 's'} · {room.cards.length} card{room.cards.length === 1 ? '' : 's'}
-          </span>
-          {live && snapshot && <AccountChips accounts={snapshot.accounts.filter(a => agents.some(x => x.harness === harnessOf(a.id)))} />}
-          {!connected && goal.live && <span className="warn-text">reconnecting…</span>}
-          {goal.notice && (
-            <span className="help-dot" title={goal.notice}>
-              i
-            </span>
-          )}
-        </div>
-        <div className="goal-actions">
+        {!phone && meta}
+        <HeaderActions notice={goal.notice}>
           {hasDesign && (
             <button className="btn ghost" onClick={onDesign} title="Read the design the room wrote">
               design.md
@@ -349,8 +356,9 @@ export function RoomHeader({ rooms, goal, room, events, snapshot, connected, onG
               </button>
             </>
           )}
-        </div>
+        </HeaderActions>
       </div>
+      {phone && meta}
     </header>
   );
 }

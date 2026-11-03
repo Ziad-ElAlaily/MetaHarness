@@ -205,7 +205,7 @@ export function Goals({ goals, kind, loaded, config, projectDir, onKind, onNew, 
               <button className="btn ghost small" onClick={() => onOpen(g.id, 'files')} title="Its shared folder: designs, reviews, reports, with every version">
                 Files
               </button>
-              <button className="btn ghost small" onClick={() => void onCommand({ cmd: 'goal.open_folder', goal: g.id })} title="Open its shared folder in your file manager">
+              <button className="btn ghost small on-computer" onClick={() => void onCommand({ cmd: 'goal.open_folder', goal: g.id })} title="Open its shared folder in your file manager">
                 Folder
               </button>
               <button className="btn ghost small danger" disabled={busy || !deletable(g)} title={deletable(g) ? 'Delete this goal' : 'End it first: agents are still at work'} onClick={() => void remove([g.id], 'this goal')}>

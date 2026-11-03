@@ -102,6 +102,8 @@ export function Harnesses({ config, selected, onSelect, onSave, onCommand }: Set
 
   return (
     <SetupLayout
+      open={!!selected}
+      onBack={() => void leave().then(ok => ok && onSelect(undefined))}
       title="Harnesses"
       intro={<>The agent CLIs on this machine. MetaHarness never handles your logins: each harness uses its own. Prices turn token counts into dollars where a harness doesn’t report cost, and the cache life is how long an idle agent’s prompt cache lasts.</>}
       list={harnesses.map(x => (

@@ -45,9 +45,13 @@ export function useLeaveGuard(dirty: boolean) {
   return async () => !dirty || (await confirm({ title: 'Discard your changes?', body: 'What you changed here isn’t saved yet.', confirm: 'Discard', danger: true }));
 }
 
-export function SetupLayout({ title, intro, list, editor, action }: { title: string; intro: ReactNode; list: ReactNode; editor: ReactNode; action?: ReactNode }) {
+/** The list and the item beside it; on a phone the list, then the item picked (`open`) in its place. */
+export function SetupLayout({ title, intro, list, editor, action, open, onBack }: { title: string; intro: ReactNode; list: ReactNode; editor: ReactNode; action?: ReactNode; open: boolean; onBack: () => void }) {
   return (
-    <div className="page setup">
+    <div className={`page setup${open ? ' item-open' : ''}`}>
+      <button className="btn ghost small setup-back" onClick={onBack}>
+        ← {title}
+      </button>
       <div className="page-head">
         <div>
           <h1>{title}</h1>

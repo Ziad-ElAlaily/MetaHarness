@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { isPhone } from '../phone.ts';
 import { ago } from '../format.ts';
 import type { InboxItem } from '../types.ts';
 import { Markdown, More } from './common.tsx';
@@ -116,7 +117,7 @@ export function InboxCard({ item, onResolve, onSelectAgent, goalLabel, compact }
         <>
           <textarea
             rows={2}
-            placeholder={item.kind === 'stalled' ? `A message to ${item.agent} (Ctrl+Enter to send)` : 'Your answer (Ctrl+Enter to send)'}
+            placeholder={(item.kind === 'stalled' ? `A message to ${item.agent}` : 'Your answer') + (isPhone() ? '' : ' (Ctrl+Enter to send)')}
             value={reply}
             onChange={e => setReply(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && (e.ctrlKey || e.metaKey) && r && onResolve(item.id, 'dismiss', r)}

@@ -6,6 +6,7 @@ import type { Agent, Goal, MhEvent } from '../types.ts';
 import { Ctx, Dot, useClock } from '../components/common.tsx';
 import { useSteadyEdges, useSteadyNodes } from '../flowNodes.ts';
 import { Splitter } from '../components/Splitter.tsx';
+import { useBackCloses } from '../phone.ts';
 import { FileSide } from './Files.tsx';
 import { fileMentions, withFileLinks } from '../fileLinks.tsx';
 
@@ -280,6 +281,7 @@ function GraphInner({ goal, events, selected, agentPanel, file, onSelect, onFile
     setAgentOpen(false);
     if (file) onFile(undefined);
   };
+  useBackCloses(!!file, closeSide);
   // An agent picked elsewhere on the page (the team column) shows here too; a file opened replaces it.
   const lastSelected = useRef(selected);
   useEffect(() => {
@@ -591,7 +593,7 @@ function GraphInner({ goal, events, selected, agentPanel, file, onSelect, onFile
 
   return (
     <>
-      <div className="toolbar">
+      <div className="toolbar graph-tools">
         <select value={String(windowMs)} onChange={e => setWindowMs(Number(e.target.value))} aria-label="Time window">
           {WINDOWS.map(([label, ms]) => (
             <option key={label} value={String(ms)}>

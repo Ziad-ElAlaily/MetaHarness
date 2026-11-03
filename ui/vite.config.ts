@@ -10,6 +10,6 @@ export default defineConfig({
   plugins: [react()],
   build: { outDir: 'dist', emptyOutDir: true },
   server: {
-    proxy: Object.fromEntries(['/state', '/events', '/goals', '/agent', '/file', '/commands'].map(p => [p, daemon])),
+    proxy: Object.fromEntries(['/state', '/projects', '/browse', '/events', '/goals', '/agent', '/file', '/media', '/git', '/diff', '/design', '/commands'].map(p => [p, daemon])),
   },
 });

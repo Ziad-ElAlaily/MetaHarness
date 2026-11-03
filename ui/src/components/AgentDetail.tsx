@@ -171,7 +171,6 @@ export function AgentDetail({ goal, agent, events, manifest, onCommand, onSpawnU
   const [urgent, setUrgent] = useState(false);
   const [openNative, setOpenNative] = useState<{ command?: string; note: string }>();
   const confirm = useConfirm();
-  const bottom = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const scroller = useRef<HTMLDivElement>(null);
 
@@ -180,7 +179,8 @@ export function AgentDetail({ goal, agent, events, manifest, onCommand, onSpawnU
     void api.agent(goal.id, agent.name).then(setDetail, () => {});
   }, [goal.id, agent.name]);
   useEffect(() => {
-    if (stick.current && tab === 'talk') bottom.current?.scrollIntoView({ block: 'end' });
+    // Not scrollIntoView: that scrolls the panes around this one as well.
+    if (stick.current && tab === 'talk' && scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
   }, [rows.length, tab]);
 
   const goalLive = goal.live && goal.status !== 'ended';
@@ -305,7 +305,6 @@ export function AgentDetail({ goal, agent, events, manifest, onCommand, onSpawnU
           <div className="stream">
             {rows.map(r => (r.kind === 'steps' ? <StepRun key={`s${r.id}`} items={r.items} /> : <StreamItem key={r.item.seq} item={r.item} />))}
             {!rows.length && <div className="empty">Nothing yet.</div>}
-            <div ref={bottom} />
           </div>
         )}
         {tab === 'changes' && <Changes goal={goal} agent={agent} events={events} onOpenGit={onOpenGit} />}

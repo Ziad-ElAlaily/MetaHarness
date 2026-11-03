@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { isPhone, useBackCloses } from '../phone.ts';
 import { api, followEvents } from '../api.ts';
 import { money } from '../format.ts';
 import type { MhEvent } from '../types.ts';
@@ -51,6 +52,7 @@ export function AssistantPanel({ open, context, project, onClose, onApplied }: {
   const [failed, setFailed] = useState<string>();
   const [options, setOptions] = useState<Options>();
   const scroller = useRef<HTMLDivElement>(null);
+  useBackCloses(open, onClose);
 
   const load = async () => {
     try {
@@ -254,7 +256,8 @@ export function AssistantPanel({ open, context, project, onClose, onApplied }: {
           placeholder={context ? `Ask about ${context}…` : 'Ask about your goals or setup…'}
           onChange={e => setText(e.target.value)}
           onKeyDown={e => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+            // A phone's keyboard has no Shift+Enter: there Enter starts a new line, and the button sends.
+            if (e.key === 'Enter' && !e.shiftKey && !isPhone()) {
               e.preventDefault();
               void ask();
             }

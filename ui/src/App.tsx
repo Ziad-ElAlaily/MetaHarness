@@ -115,7 +115,10 @@ function Shell() {
     setPlace(prev => {
       const pl = { ...prev, ...next };
       const hash = writeHash(pl);
-      if (hash !== location.hash) (replace ? history.replaceState : history.pushState).call(history, null, '', hash);
+      if (hash !== location.hash) {
+        if (replace) history.replaceState(history.state, '', hash);
+        else history.pushState(null, '', hash);
+      }
       return pl;
     });
   }, []);
@@ -468,8 +471,13 @@ function Shell() {
 
 /** Setup's pages in their groups, across the top of each. */
 function SetupNav({ page, onPage }: { page: SetupPage; onPage: (p: SetupPage) => void }) {
+  const strip = useRef<HTMLElement>(null);
+  // On a phone the strip scrolls sideways: the current page stays in view.
+  useEffect(() => {
+    strip.current?.querySelector('.tab.on')?.scrollIntoView({ block: 'nearest', inline: 'center' });
+  }, [page]);
   return (
-    <nav className="setup-nav" aria-label="Setup">
+    <nav className="setup-nav" aria-label="Setup" ref={strip}>
       {SETUP.map(([group, pages]) => (
         <span key={group} className="setup-group">
           <span className="setup-group-name">{group}</span>

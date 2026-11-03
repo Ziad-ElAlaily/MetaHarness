@@ -2,6 +2,7 @@ import { Component, createContext, Fragment, useCallback, useContext, useEffect,
 import type { Agent } from '../types.ts';
 import { modelLabel } from '../format.ts';
 import { fileAt, withFileLinks, type FileLinks } from '../fileLinks.tsx';
+import { useBackCloses, useIsPhone } from '../phone.ts';
 
 /**
  * Keeps a view that throws from blanking the whole app: it says what broke and offers to try
@@ -115,6 +116,7 @@ export function Ctx({ pct }: { pct: number | null }) {
 }
 
 export function Dialog({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
+  useBackCloses(true, onClose);
   useEffect(() => {
     const key = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', key);
@@ -126,6 +128,33 @@ export function Dialog({ title, onClose, children, wide }: { title: string; onCl
         <h3>{title}</h3>
         {children}
       </div>
+    </div>
+  );
+}
+
+/** A goal's or a room's actions: in a row, or on a phone under a ⋯ menu, with the notice a tooltip gives elsewhere. */
+export function HeaderActions({ notice, children }: { notice?: string | null; children: ReactNode }) {
+  const phone = useIsPhone();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    window.addEventListener('mousedown', close);
+    return () => window.removeEventListener('mousedown', close);
+  }, [open]);
+  if (!phone) return <div className="goal-actions">{children}</div>;
+  return (
+    <div className="actions-menu" ref={ref}>
+      <button className="btn ghost" onClick={() => setOpen(o => !o)} aria-haspopup="menu" aria-expanded={open} aria-label="More actions">
+        ⋯
+      </button>
+      {open && (
+        <div className="menu goal-actions" onClick={e => (e.target as HTMLElement).closest('button') && setOpen(false)}>
+          {children}
+          {notice && <div className="muted small">{notice}</div>}
+        </div>
+      )}
     </div>
   );
 }

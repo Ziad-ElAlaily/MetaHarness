@@ -58,6 +58,8 @@ export function Rules({ config, selected, onSelect, onSave }: SetupProps) {
 
   return (
     <SetupLayout
+      open={!!selected}
+      onBack={() => void go()}
       title="Rules"
       intro={
         <>

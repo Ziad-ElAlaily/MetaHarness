@@ -70,7 +70,9 @@ export function Home({ goals, rooms, loaded, config, onOpen, onOpenRoom, onNewRo
   const q = query.toLowerCase();
   const found = q ? chains.filter(c => c.steps.some(g => `${g.request} ${g.result ?? ''}`.toLowerCase().includes(q))) : chains;
   const shown = showAll || q ? found : found.slice(0, 6);
-  const needs = (overview?.inbox ?? []).filter(i => ACTIONABLE.includes(i.kind));
+  // What you just answered goes at once, not at the next refresh; it comes back if the answer didn't get through.
+  const [answered, setAnswered] = useState<string[]>([]);
+  const needs = (overview?.inbox ?? []).filter(i => ACTIONABLE.includes(i.kind) && !answered.includes(i.id));
   const [away, setAway] = useAway(overview?.away, onCommand);
   const label = (id: string) => goalTitle(all.find(g => g.id === id)?.request).slice(0, 40) || id;
   const roles = config?.roles.length ?? 0;
@@ -112,7 +114,12 @@ export function Home({ goals, rooms, loaded, config, onOpen, onOpenRoom, onNewRo
       <NeedsYou
         items={needs}
         goalLabel={label}
-        onResolve={(item, decision, reply) => void onCommand({ cmd: 'inbox.resolve', item, decision, reply })}
+        onResolve={(item, decision, reply) => {
+          setAnswered(a => [...a, item]);
+          void onCommand({ cmd: 'inbox.resolve', item, decision, reply }).then(r => {
+            if (!r) setAnswered(a => a.filter(x => x !== item));
+          });
+        }}
         onSelectAgent={(name, goal) => onOpen(goal, name)}
       />
 

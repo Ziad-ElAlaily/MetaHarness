@@ -79,6 +79,8 @@ export function Tools({ config, selected, onSelect, onSave }: SetupProps) {
 
   return (
     <SetupLayout
+      open={!!selected}
+      onBack={() => void go()}
       title="Tools & skills"
       intro={
         <>

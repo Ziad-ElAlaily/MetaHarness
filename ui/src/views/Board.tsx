@@ -6,6 +6,7 @@ import { api, mediaUrl } from '../api.ts';
 import { Dialog, Field, Markdown, useNow } from '../components/common.tsx';
 import { oneLine } from '../format.ts';
 import type { FileLinks } from '../fileLinks.tsx';
+import { useBackCloses, useIsPhone } from '../phone.ts';
 
 type Cmd = (body: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>;
 
@@ -26,7 +27,10 @@ const FRESH_MS = 12_000;
 const MIN_K = 0.25;
 const MAX_K = 2;
 
-type Drag = { kind: 'card' | 'frame' | 'pan'; id?: string; sx: number; sy: number; dx: number; dy: number; moved: boolean; add?: boolean };
+type Drag = { kind: 'card' | 'frame' | 'pan'; id?: string; sx: number; sy: number; dx: number; dy: number; moved: boolean; add?: boolean; tap?: string; held?: boolean };
+/** How long a finger stays still on a card to take it rather than pan. */
+const HOLD_MS = 350;
+const READABLE_K = 0.7;
 type Mix = { cards: { id: string; take: string }[]; make: string };
 
 /**
@@ -50,6 +54,16 @@ export function Board({ goal, room, live, color, files, onCommand, onAskLead, on
   const [asking, setAsking] = useState<{ cards: string[] }>();
   const [adding, setAdding] = useState<{ kind: CardKind; title: string; url: string }>();
   const [framing, setFraming] = useState<string>();
+  const phone = useIsPhone();
+  // Fingers on the board, for pinching; a finger held still on a card; picking by tapping.
+  const fingers = useRef(new Map<number, { x: number; y: number }>());
+  const pinch = useRef<{ dist: number; x: number; y: number }>(undefined);
+  const hold = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const [selecting, setSelecting] = useState(false);
+  useEffect(() => {
+    if (!picked.length) setSelecting(false);
+  }, [picked.length]);
+  useBackCloses(!!open, () => setOpen(undefined));
   const op = (...ops: Record<string, unknown>[]) => void onCommand({ cmd: 'room.canvas', goal: goal.id, ops });
 
   useEffect(() => {
@@ -91,10 +105,12 @@ export function Board({ goal, room, live, color, files, onCommand, onAskLead, on
       return { k, x: px - ((px - v.x) * k) / v.k, y: py - ((py - v.y) * k) / v.k };
     });
   };
-  const fit = (b: Box) => {
+  const fit = (b: Box, readable = false) => {
     const r = vp.current?.getBoundingClientRect();
     if (!r || !b.w) return;
     const k = Math.min(MAX_K, Math.max(MIN_K, Math.min((r.width - 60) / b.w, (r.height - 60) / b.h, 1.1)));
+    // A whole board on a phone is too small to read: there it opens at its top left, to pan around.
+    if (readable && k < READABLE_K) return setView({ k: READABLE_K, x: 12 - b.x * READABLE_K, y: 12 - b.y * READABLE_K });
     setView({ k, x: (r.width - b.w * k) / 2 - b.x * k, y: Math.max(16, (r.height - b.h * k) / 2) - b.y * k });
   };
   // The whole board in view the first time there's something on it.
@@ -102,7 +118,7 @@ export function Board({ goal, room, live, color, files, onCommand, onAskLead, on
   useLayoutEffect(() => {
     if (fitted.current || !room.cards.length || !measured) return;
     fitted.current = true;
-    fit(layout.bounds);
+    fit(layout.bounds, phone);
   });
 
   // Plain wheel pans, ctrl (or a pinch) zooms. Not passive, so the page doesn't scroll instead.
@@ -127,16 +143,56 @@ export function Board({ goal, room, live, color, files, onCommand, onAskLead, on
     }
   };
   const down = (e: React.PointerEvent, kind: Drag['kind'], id?: string) => {
-    if (e.button !== 0 || (e.target as HTMLElement).closest('button, input, textarea, select, a, iframe, .no-drag')) return;
+    if (fingers.current.size > 1 || e.button !== 0 || (e.target as HTMLElement).closest('button, input, textarea, select, a, iframe, .no-drag')) return;
     if (kind !== 'pan') e.stopPropagation();
     vp.current!.setPointerCapture(e.pointerId);
-    setDrag({ kind, id, sx: e.clientX, sy: e.clientY, dx: 0, dy: 0, moved: false, add: e.shiftKey || e.ctrlKey || e.metaKey });
+    const start = { sx: e.clientX, sy: e.clientY, dx: 0, dy: 0, moved: false };
+    // Cards fill a phone's board, so a finger pans wherever it lands. Held still, it takes the card: a pick, then a move if it drags on.
+    if (e.pointerType === 'touch' && kind !== 'pan') {
+      setDrag({ ...start, kind: 'pan', tap: kind === 'card' ? id : undefined });
+      hold.current = setTimeout(() => {
+        navigator.vibrate?.(10);
+        setDrag(d => (d && !d.moved ? { ...d, kind, id, held: true } : d));
+        if (kind === 'card') {
+          setSelecting(true);
+          setPicked(p => (p.includes(id!) ? p : [...p, id!]));
+        }
+      }, HOLD_MS);
+      return;
+    }
+    setDrag({ ...start, kind, id, add: e.shiftKey || e.ctrlKey || e.metaKey });
+  };
+  /** Two fingers: pinch to zoom, and pan with where they are between them. */
+  const fingerDown = (e: React.PointerEvent) => {
+    if (e.pointerType !== 'touch') return;
+    fingers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (fingers.current.size !== 2) return;
+    clearTimeout(hold.current);
+    setDrag(undefined);
+    for (const id of fingers.current.keys()) vp.current!.setPointerCapture(id);
+  };
+  const fingerUp = (e: React.PointerEvent) => {
+    fingers.current.delete(e.pointerId);
+    pinch.current = undefined;
   };
   const move = (e: React.PointerEvent) => {
+    if (fingers.current.has(e.pointerId)) fingers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (fingers.current.size === 2) {
+      const [a, b] = [...fingers.current.values()];
+      const now = { dist: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      const was = pinch.current;
+      if (was) {
+        setView(v => ({ ...v, x: v.x + now.x - was.x, y: v.y + now.y - was.y }));
+        zoomAt(now.dist / was.dist, now.x, now.y);
+      }
+      pinch.current = now;
+      return;
+    }
     if (!drag) return;
     const dx = e.clientX - drag.sx;
     const dy = e.clientY - drag.sy;
     const moved = drag.moved || Math.hypot(dx, dy) > 4;
+    if (moved) clearTimeout(hold.current);
     if (drag.kind === 'pan' && moved) {
       setView(v => ({ ...v, x: v.x + dx - drag.dx, y: v.y + dy - drag.dy }));
     }
@@ -144,11 +200,16 @@ export function Board({ goal, room, live, color, files, onCommand, onAskLead, on
   };
   const up = (e: React.PointerEvent) => {
     const d = drag;
+    clearTimeout(hold.current);
+    fingerUp(e);
     setDrag(undefined);
     if (!d) return;
     if (!d.moved) {
-      if (d.kind === 'card') pick(d.id!, !!d.add);
-      if (d.kind === 'pan') setPicked([]);
+      if (d.held) return;
+      // Once a card has been held, tapping others picks them too, as a phone's lists do.
+      if (d.tap) pick(d.tap, selecting);
+      else if (d.kind === 'card') pick(d.id!, !!d.add);
+      else if (d.kind === 'pan') setPicked([]);
       return;
     }
     if (!live) return;
@@ -267,7 +328,7 @@ export function Board({ goal, room, live, color, files, onCommand, onAskLead, on
             </button>
           </>
         ) : (
-          <span className="muted small">{room.cards.length ? 'Click a card to open it, shift-click to pick more. Drag to move; drop on a frame to put it there.' : ''}</span>
+          <span className="muted small board-hint">{!room.cards.length ? '' : phone ? 'Tap a card to open it, hold it to pick more. Hold and drag to move. Pinch to zoom.' : 'Click a card to open it, shift-click to pick more. Drag to move; drop on a frame to put it there.'}</span>
         )}
         <span className="grow" />
         {framing !== undefined && (
@@ -367,7 +428,7 @@ export function Board({ goal, room, live, color, files, onCommand, onAskLead, on
         </span>
       </div>
       <div className="board-area">
-        <div className={`board${drag?.moved ? ' dragging' : ''}`} ref={vp} onPointerDown={e => down(e, 'pan')} onPointerMove={move} onPointerUp={up} onPointerCancel={() => setDrag(undefined)}>
+        <div className={`board${drag?.moved ? ' dragging' : ''}`} ref={vp} onPointerDownCapture={fingerDown} onPointerDown={e => down(e, 'pan')} onPointerMove={move} onPointerUp={up} onPointerCancel={e => (clearTimeout(hold.current), fingerUp(e), setDrag(undefined))} onContextMenu={e => phone && e.preventDefault()}>
           <div className="board-layer" style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.k})` }}>
             {room.frames.map(f => {
               const b = layout.frames.get(f.id);

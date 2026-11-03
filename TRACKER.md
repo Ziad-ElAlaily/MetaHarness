@@ -605,6 +605,19 @@ Findings from the run:
 - [ ] Your own runs with the UI (live harnesses); fix what they turn up
 - [ ] Build order 3 (Milestone 3): shared-folder history browser, replay, search
 
+- [x] **Usable on a phone** (2026-11-03). Up to 720px wide, or a phone on its side, the app shows
+  one pane at a time (`ui/src/phone.ts`, the "Phones" block in `styles.css`); bigger screens are
+  as they were. Goal page: a slim header with its actions under a ⋯ menu, Team as a tab, an agent
+  over the whole screen. Rooms: chat or board. Files and Setup: the list, then the item in its
+  place. The back gesture closes what's open over the page. Board by finger: drag pans, tap
+  opens, hold picks, hold and drag moves, pinch zooms. Enter makes a new line on a phone (Send
+  sends). Fixed along the way, on every screen: `scrollIntoView` also scrolled the panes around
+  a feed, so a goal page narrower than 1180px opened at its bottom and shifted sideways; Home
+  drops an answered item at once instead of up to 4 s later; `ui:dev` proxied too few routes to
+  load. Checked by driving headless Chromium with touch on a scripted daemon at 390x844, 320x568,
+  844x390 and in dark mode, and against the previous build at 1440 and 1000 wide. Not yet: a real
+  phone; the daemon listens on 127.0.0.1 only, so a phone needs a tunnel to reach it.
+
 ## Milestone 3: improve
 
 - [ ] Role×model stats, retrospectives (totalling the Design view's findings and reports across goals),

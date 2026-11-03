@@ -46,6 +46,8 @@ export function Workflows({ config, selected, onSelect, onSave, onStartWith }: S
 
   return (
     <SetupLayout
+      open={!!selected}
+      onBack={() => void go()}
       title="Workflows"
       intro={<>How to run one kind of task, step by step. A goal’s lead follows one; when you don’t pick, it reads each workflow’s <i>good at</i> line and chooses. A workflow can hand on to another by naming it.</>}
       action={

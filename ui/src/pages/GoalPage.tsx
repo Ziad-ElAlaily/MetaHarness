@@ -4,7 +4,7 @@ import type { ConfigView, Goal, GoalSummary, MhEvent, Snapshot } from '../types.
 import { TeamTree } from '../components/TeamTree.tsx';
 import { ACTIONABLE, NeedsYou, Updates } from '../components/Inbox.tsx';
 import { AgentDetail } from '../components/AgentDetail.tsx';
-import { ErrorBoundary, Markdown, More, useConfirm } from '../components/common.tsx';
+import { ErrorBoundary, HeaderActions, Markdown, More, useConfirm } from '../components/common.tsx';
 import { ContinueButtons, MessageDialog, type ContinueFrom } from '../components/Dialogs.tsx';
 import { AccountChips, harnessOf } from '../components/Accounts.tsx';
 import { ApprovalsSelect, AwayButton, AwayNote, useAway } from '../components/Away.tsx';
@@ -16,6 +16,7 @@ import type { GitSel } from '../views/Git.tsx';
 import type { DesignNav } from '../views/Design.tsx';
 import { RoomHeader, type RoomFrom } from '../components/Room.tsx';
 import { roomOf } from '../roomData.ts';
+import { useBackCloses, useIsPhone } from '../phone.ts';
 
 // The flow views pull in React Flow; load them when first opened.
 const Graph = lazy(() => import('../views/Graph.tsx'));
@@ -25,7 +26,7 @@ const Costs = lazy(() => import('../views/Costs.tsx'));
 const Design = lazy(() => import('../views/Design.tsx'));
 const RoomView = lazy(() => import('../views/RoomView.tsx'));
 
-export type GoalTab = 'thread' | 'story' | 'design' | 'git' | 'files' | 'graph' | 'sequence' | 'timeline' | 'costs' | 'log';
+export type GoalTab = 'thread' | 'team' | 'story' | 'design' | 'git' | 'files' | 'graph' | 'sequence' | 'timeline' | 'costs' | 'log';
 /** A tab, and the views it switches between (the first is where it opens). */
 type TabDef = { id: GoalTab; label: string; title: string; views?: [GoalTab, string, string][] };
 const TAB = {
@@ -43,6 +44,9 @@ const TAB = {
   room: { id: 'thread', label: 'Room', title: 'The room: the chat with its lead, the board, and the makers' },
 } satisfies Record<string, TabDef>;
 const TABS: TabDef[] = [TAB.story, TAB.graph, TAB.design, TAB.files, TAB.costs];
+/** On a phone the team has no column: it's a tab, and picking an agent opens it over the page. */
+const TEAM_TAB: TabDef = { id: 'team', label: 'Team', title: 'Who is on it and what each is doing, and the updates' };
+const ON_PHONE: Room = { team: true, agent: true };
 /** A room's tabs: the room, then what it wrote and what it cost. */
 const ROOM_TABS: TabDef[] = [TAB.room, TAB.files, TAB.costs];
 /** The tab each view belongs to (Git is the Design tab's Commits lens). */
@@ -117,9 +121,11 @@ interface Props {
 export function GoalPage(p: Props) {
   const { goal, snapshot, events } = p;
   const isRoom = goal?.kind === 'room';
+  const phone = useIsPhone();
   const roomView = useMemo(() => (isRoom ? roomOf(events) : undefined), [isRoom, events]);
   // A room has its room tab (kept as "thread" in links) where a goal has a story; a room's other tabs are a goal's.
-  const tab: GoalTab = isRoom ? (['thread', 'files', 'costs'].includes(p.tab) ? p.tab : 'thread') : p.tab === 'thread' ? 'story' : p.tab === 'git' ? 'design' : p.tab;
+  const asked: GoalTab = p.tab === 'team' && !phone ? (isRoom ? 'thread' : 'story') : p.tab;
+  const tab: GoalTab = isRoom ? (['thread', 'team', 'files', 'costs'].includes(asked) ? asked : 'thread') : asked === 'thread' ? 'story' : asked === 'git' ? 'design' : asked;
   const group = TAB_OF[tab] ?? tab;
   // Links to the Git tab open the Design tab's Commits lens.
   useEffect(() => {
@@ -143,19 +149,23 @@ export function GoalPage(p: Props) {
     setDesignNav(n => ({ ...n, lens: 'commits' }));
     p.onTab('design');
   };
-  const [room, setRoom] = useRoom(isRoom ? 'room' : 'goal');
+  const [savedRoom, setRoom] = useRoom(isRoom ? 'room' : 'goal');
+  // What you put away on a big screen is kept for it; a phone always shows the one pane.
+  const room = phone ? ON_PHONE : savedRoom;
   // With its column put away, an agent picked slides in over the tab; the graph shows it in its own side panel instead.
   const [drawer, setDrawer] = useState(false);
   const onAgent = (name?: string) => {
-    if (room.agent && name && tab !== 'graph') setDrawer(true);
+    if (room.agent && name && (phone || tab !== 'graph')) setDrawer(true);
     p.onAgent(name);
   };
   // The graph and a room read a shared file in their side panel; elsewhere it opens in the Files tab.
   const openFile = (path: string) => {
+    if (phone) setDrawer(false);
     p.onFile(path);
     if (tab !== 'graph' && tab !== 'thread') p.onTab('files');
   };
   useEffect(() => setDrawer(false), [tab]);
+  useBackCloses(drawer, () => setDrawer(false));
   useEffect(() => {
     if (!drawer) return;
     const esc = (e: KeyboardEvent) => {
@@ -167,6 +177,8 @@ export function GoalPage(p: Props) {
     return () => window.removeEventListener('keydown', esc, true);
   }, [drawer]);
   const allAway = !!(room.team && room.header && room.agent);
+  // First on a room (the room itself leads), second on a goal (after its story).
+  const shownTabs = !phone ? (isRoom ? ROOM_TABS : TABS) : isRoom ? [ROOM_TABS[0], TEAM_TAB, ...ROOM_TABS.slice(1)] : [TABS[0], TEAM_TAB, ...TABS.slice(1)];
   useEffect(() => setDesignNav({}), [goal?.id]);
 
   if (!goal) {
@@ -247,16 +259,19 @@ export function GoalPage(p: Props) {
           {away && !isRoom && goal.status === 'running' && <AwayNote compact />}
           <NeedsYou items={needs} onResolve={resolve} onSelectAgent={onAgent} />
           <nav className="tabs">
-            {room.header && (
+            {!phone && room.header && (
               <button className="tabs-goal ellipsis" onClick={() => setRoom({ ...room, header: false })} title={`${goal.request}\n\nShow the goal's header again`}>
                 <span className={`pill ${goal.status}`}>{goal.status}</span> {goal.request.split('\n')[0]}
               </button>
             )}
-            {(isRoom ? ROOM_TABS : TABS).map(t => (
-              <button key={t.id} className={`tab${group === t.id ? ' on' : ''}`} title={t.title} onClick={() => group !== t.id && p.onTab(t.id)}>
-                {t.label}
-              </button>
-            ))}
+            <span className="tab-strip">
+              {shownTabs.map(t => (
+                <button key={t.id} className={`tab${group === t.id ? ' on' : ''}`} title={t.title} onClick={() => group !== t.id && p.onTab(t.id)}>
+                  {t.label}
+                  {t.id === 'team' && updates.length > 0 && <span className="badge quiet">{updates.length}</span>}
+                </button>
+              ))}
+            </span>
             {TABS.find(t => t.id === group)?.views && (
               <span className="seg tab-views" role="group" aria-label="View">
                 {TABS.find(t => t.id === group)!.views!.map(([v, label, title]) => (
@@ -267,7 +282,7 @@ export function GoalPage(p: Props) {
               </span>
             )}
             <span className="grow" />
-            <span className="room-toggles" role="group" aria-label="Make room">
+            {!phone && <span className="room-toggles" role="group" aria-label="Make room">
               <RoomButton on={!room.team} label="team column" icon="team" onClick={() => setRoom({ ...room, team: !room.team })} />
               <RoomButton on={!room.header} label="goal header" icon="header" onClick={() => setRoom({ ...room, header: !room.header })} />
               <RoomButton on={!room.agent} label="agent column" icon="agent" onClick={() => setRoom({ ...room, agent: !room.agent })} />
@@ -279,10 +294,19 @@ export function GoalPage(p: Props) {
               >
                 {allAway ? '⤡' : '⤢'}
               </button>
-            </span>
+            </span>}
           </nav>
           <ErrorBoundary resetKey={`${goal.id}/${tab}`}>
           <Suspense fallback={<div className="empty">Loading…</div>}>
+            {tab === 'team' && (
+              <div className="scroll team-pane">
+                <div className="section-title">
+                  Team <span className="muted normal">{teamSummary(goal)}</span>
+                </div>
+                <TeamTree goal={goal} selected={drawer ? agent?.name : undefined} onSelect={onAgent} />
+                <Updates items={updates} onResolve={resolve} onSelectAgent={onAgent} />
+              </div>
+            )}
             {tab === 'thread' && roomView && (
               <RoomView
                 goal={goal}
@@ -335,15 +359,23 @@ export function GoalPage(p: Props) {
         )}
         {room.agent && drawer && (
           <aside className="col agent-drawer" aria-label="Agent">
-            <div className="drawer-head">
-              <span className="muted small">Esc closes it</span>
-              <button className="btn ghost small" onClick={() => setRoom({ ...room, agent: false })} title="Keep the agent beside the tab instead">
-                Pin as a column
-              </button>
-              <button className="drawer-x" onClick={() => setDrawer(false)} title="Close (Esc)" aria-label="Close the agent">
-                ×
-              </button>
-            </div>
+            {phone ? (
+              <div className="drawer-head">
+                <button className="btn ghost small" onClick={() => setDrawer(false)}>
+                  ← Back
+                </button>
+              </div>
+            ) : (
+              <div className="drawer-head">
+                <span className="muted small">Esc closes it</span>
+                <button className="btn ghost small" onClick={() => setRoom({ ...savedRoom, agent: false })} title="Keep the agent beside the tab instead">
+                  Pin as a column
+                </button>
+                <button className="drawer-x" onClick={() => setDrawer(false)} title="Close (Esc)" aria-label="Close the agent">
+                  ×
+                </button>
+              </div>
+            )}
             {agentDetail}
           </aside>
         )}
@@ -377,6 +409,7 @@ function teamSummary(goal: Goal): string {
 
 function GoalHeader({ goals, goal, events, snapshot, connected, config, onGoal, onCommand, onSaveConfig, onSpawn, onNewGoal, onAllGoals }: Props & { goal: Goal }) {
   const confirm = useConfirm();
+  const phone = useIsPhone();
   const [messaging, setMessaging] = useState(false);
   const agents = goal.agents;
   const live = goal.live && goal.status !== 'ended';
@@ -409,12 +442,14 @@ function GoalHeader({ goals, goal, events, snapshot, connected, config, onGoal, 
   return (
     <header className="goal-header compact">
       <div className="goal-title-row">
-        <button className="btn primary new-btn" onClick={onNewGoal} title="Start another goal">
-          + New goal
-        </button>
+        {!phone && (
+          <button className="btn primary new-btn" onClick={onNewGoal} title="Start another goal">
+            + New goal
+          </button>
+        )}
         <GoalSwitcher goals={goals.slice(0, 12)} goal={goal} onGoal={onGoal} onNewGoal={onNewGoal} onAllGoals={onAllGoals} />
-        {meta}
-        <div className="goal-actions">
+        {!phone && meta}
+        <HeaderActions notice={goal.notice}>
           {live && (
             <>
               <ApprovalsSelect config={config} onSave={onSaveConfig} />
@@ -440,8 +475,9 @@ function GoalHeader({ goals, goal, events, snapshot, connected, config, onGoal, 
             </>
           )}
           {!live || goal.status !== 'running' ? <CleanButton goal={goal} onCommand={onCommand} /> : null}
-        </div>
+        </HeaderActions>
       </div>
+      {phone && meta}
       {messaging && <MessageDialog goal={goal} onClose={() => setMessaging(false)} onSend={async b => !!(await onCommand(b))} />}
     </header>
   );

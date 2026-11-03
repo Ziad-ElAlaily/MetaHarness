@@ -74,6 +74,8 @@ export function Roles({ config, selected, onSelect, onSave, onCommand }: SetupPr
 
   return (
     <SetupLayout
+      open={!!selected}
+      onBack={() => void go()}
       title="Roles"
       intro={
         <>
