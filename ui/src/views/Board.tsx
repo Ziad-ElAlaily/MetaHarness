@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { CanvasCard, CardKind, Goal, Knob, Lens } from '../types.ts';
+import type { CanvasCard, CardKind, Goal, Knob, Lens, PrototypeInfo } from '../types.ts';
 import { CARD_KINDS, demoKnobs, kindOf, MIX_MAKES, TAKES, type GodotRun, type RoomView as Room } from '../roomData.ts';
 import { CARD_W, edgePoint, frameAt, layoutBoard, type Box } from '../boardLayout.ts';
 import { api, mediaUrl } from '../api.ts';
@@ -7,6 +7,8 @@ import { Dialog, Field, Markdown, useNow } from '../components/common.tsx';
 import { oneLine } from '../format.ts';
 import type { FileLinks } from '../fileLinks.tsx';
 import { useBackCloses, useIsPhone } from '../phone.ts';
+import { MergeDialog, PrototypeBody, PrototypeDialog, verdictLabel } from '../components/Prototypes.tsx';
+import type { ContinueFrom } from '../components/Dialogs.tsx';
 
 type Cmd = (body: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>;
 
@@ -21,6 +23,8 @@ interface Props {
   onAskLead: (id: string) => void;
   onBranch: (ids: string[]) => void;
   onRoom: (id: string) => void;
+  /** A new goal from a prototype. */
+  onContinue?: (f: ContinueFrom) => void;
 }
 
 const FRESH_MS = 12_000;
@@ -40,7 +44,7 @@ type Mix = { cards: { id: string; take: string }[]; make: string };
  * lead about them, frame, branch, settle or drop them; open one to see it whole: an image, a
  * demo to play and tune, a source, a concept.
  */
-export function Board({ goal, room, live, color, files, onCommand, onAskLead, onBranch, onRoom }: Props) {
+export function Board({ goal, room, live, color, files, onCommand, onAskLead, onBranch, onRoom, onContinue }: Props) {
   const now = useNow(2000);
   const vp = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ x: 24, y: 24, k: 1 });
@@ -54,6 +58,8 @@ export function Board({ goal, room, live, color, files, onCommand, onAskLead, on
   const [asking, setAsking] = useState<{ cards: string[] }>();
   const [adding, setAdding] = useState<{ kind: CardKind; title: string; url: string }>();
   const [framing, setFraming] = useState<string>();
+  const [prototyping, setPrototyping] = useState<{ ideas: { title: string; ask: string; card?: string }[]; replaces?: string }>();
+  const [merging, setMerging] = useState<PrototypeInfo[]>();
   const phone = useIsPhone();
   // Fingers on the board, for pinching; a finger held still on a card; picking by tapping.
   const fingers = useRef(new Map<number, { x: number; y: number }>());
@@ -120,6 +126,16 @@ export function Board({ goal, room, live, color, files, onCommand, onAskLead, on
     fitted.current = true;
     fit(layout.bounds, phone);
   });
+
+  // A new prototype can land out of view: they're worth seeing side by side.
+  const prototypeCount = room.cards.filter(c => c.prototype).length;
+  const prototypesSeen = useRef(prototypeCount);
+  useEffect(() => {
+    if (prototypeCount > prototypesSeen.current) fit(layout.bounds, phone);
+    prototypesSeen.current = prototypeCount;
+    // Only when one is added: where you've panned to is otherwise yours.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prototypeCount]);
 
   // Plain wheel pans, ctrl (or a pinch) zooms. Not passive, so the page doesn't scroll instead.
   useEffect(() => {
@@ -275,7 +291,9 @@ export function Board({ goal, room, live, color, files, onCommand, onAskLead, on
 
   const sel = room.cards.filter(c => picked.includes(c.id));
   const openCard = room.cards.find(c => c.id === open);
-  const makers = room.lenses.filter(l => !l.off);
+  const makers = room.lenses.filter(l => !l.off && !l.prototype);
+  const pickedPrototypes = sel.filter(c => c.prototype);
+  const pickedIdeas = sel.filter(c => !c.prototype && !c.pending);
   const startMix = (ids: string[], make?: string) =>
     setMix({ cards: ids.map(id => ({ id, take: '' })), make: make ?? (makers.some(m => m.makes === 'image') ? 'image' : 'text') });
 
@@ -289,9 +307,21 @@ export function Board({ goal, room, live, color, files, onCommand, onAskLead, on
             </span>
             {live && (
               <>
-                <button className="btn small primary" onClick={() => startMix(picked)} title="Make something new from these cards: say what to take from each">
-                  ⚗ Mix…
-                </button>
+                {!pickedPrototypes.length && (
+                  <button className="btn small primary" onClick={() => startMix(picked)} title="Make something new from these cards: say what to take from each">
+                    ⚗ Mix…
+                  </button>
+                )}
+                {pickedIdeas.length === sel.length && (
+                  <button className="btn small" onClick={() => setPrototyping({ ideas: pickedIdeas.map(c => ({ title: c.title, ask: c.text ?? '', card: c.id })) })} title="A playable prototype for each of these, with a builder of its own, all at once">
+                    ▶ Prototype each…
+                  </button>
+                )}
+                {pickedPrototypes.length >= 2 && pickedPrototypes.length === sel.length && (
+                  <button className="btn small primary" onClick={() => setMerging(pickedPrototypes.map(c => room.prototypes.find(p => p.id === c.prototype)).filter((p): p is PrototypeInfo => !!p))} title="A new prototype with all of these in it, to play them together">
+                    ⚗ Merge…
+                  </button>
+                )}
                 <button className="btn small" onClick={() => setAsking({ cards: picked })} title="Ask a maker directly about these cards">
                   Ask a maker…
                 </button>
@@ -360,7 +390,7 @@ export function Board({ goal, room, live, color, files, onCommand, onAskLead, on
           (adding ? (
             <span className="card-add">
               <select value={adding.kind} onChange={e => setAdding({ ...adding, kind: e.target.value as CardKind })} aria-label="Kind">
-                {CARD_KINDS.filter(k => !['image', 'demo', 'finding'].includes(k.kind)).map(k => (
+                {CARD_KINDS.filter(k => !['image', 'demo', 'finding', 'prototype'].includes(k.kind)).map(k => (
                   <option key={k.kind} value={k.kind}>
                     {k.label}
                   </option>
@@ -387,6 +417,11 @@ export function Board({ goal, room, live, color, files, onCommand, onAskLead, on
               <button className="btn ghost small" onClick={() => setAdding({ kind: 'idea', title: '', url: '' })} title="Put a card on the board yourself">
                 + Card
               </button>
+              {!sel.length && (
+                <button className="btn ghost small" onClick={() => setPrototyping({ ideas: [] })} title="A playable prototype of an idea, with a builder of its own">
+                  + Prototype
+                </button>
+              )}
               <button className="btn ghost small" onClick={() => setFraming('')} title="A frame to group cards in">
                 + Frame
               </button>
@@ -502,11 +537,25 @@ export function Board({ goal, room, live, color, files, onCommand, onAskLead, on
             onRemix={() => setMix({ cards: (openCard.from ?? []).map(i => ({ id: i.id, take: i.take ?? '' })), make: openCard.kind === 'idea' ? 'ideas' : openCard.kind })}
             onRoom={onRoom}
             onCommand={onCommand}
+            onContinue={onContinue}
+            onStartOver={p => setPrototyping({ ideas: [{ title: p.title, ask: p.idea }], replaces: p.id })}
           />
         )}
         {asking && live && <AskBar goal={goal} room={room} cards={asking.cards} makers={makers} onClose={() => setAsking(undefined)} onCommand={onCommand} />}
       </div>
       {mix && <MixDialog goal={goal} room={room} mix={mix} makers={makers} onClose={() => setMix(undefined)} onCommand={onCommand} />}
+      {prototyping && (
+        <PrototypeDialog
+          goal={goal}
+          ideas={prototyping.ideas}
+          onClose={() => setPrototyping(undefined)}
+          onCommand={onCommand}
+          onStarted={() => {
+            if (prototyping.replaces) void onCommand({ cmd: 'room.prototypeVerdict', goal: goal.id, id: prototyping.replaces, kind: 'drop', why: 'Started over from another starting point' });
+          }}
+        />
+      )}
+      {merging && <MergeDialog goal={goal} prototypes={merging} onClose={() => setMerging(undefined)} onCommand={onCommand} />}
     </div>
   );
 }
@@ -602,6 +651,7 @@ function CardTile({ card: c, goal, room, color, at, picked, open, dim, lifted, f
         <div className="card-title">{c.title}</div>
       )}
       {c.kind === 'image' && c.file && <img className="card-thumb" src={`${mediaUrl(goal.id, c.file)}&v=${stamp}`} alt={c.title} loading="lazy" draggable={false} />}
+      {c.kind === 'prototype' && !c.pending && <PrototypeLine card={c} room={room} goal={goal} />}
       {c.kind === 'demo' && c.file && <div className="card-play">{isGodot(c.file) ? '▶ Open to run in Godot' : '▶ Open to play and tune'}</div>}
       {c.url && <div className="card-more ellipsis">↗ {hostOf(c.url)}</div>}
       {c.pillars?.length ? (
@@ -644,8 +694,33 @@ const hostOf = (url: string) => {
   }
 };
 
+/** A prototype at a glance on its card: its versions and where it stands. */
+function PrototypeLine({ card, room, goal }: { card: CanvasCard; room: Room; goal: Goal }) {
+  const p = room.prototypes.find(x => x.id === card.prototype);
+  if (!p) return null;
+  const builder = goal.agents.find(a => a.name === p.id);
+  const working = !!builder && ['starting', 'working'].includes(builder.state);
+  const running = room.godot[`prototype:${p.id}`];
+  const shown = p.versions.slice(-6);
+  return (
+    <div className="proto-line">
+      <span className="proto-strip" title={p.versions.map(v => `v${v.n}: ${v.note}`).join('\n')}>
+        {p.versions.length > shown.length && <span className="muted">…</span>}
+        {shown.map(v => (
+          <span key={v.n} className={`proto-dot${p.verdict?.version === v.n ? ' kept' : ''}`}>v{v.n}</span>
+        ))}
+      </span>
+      {working && <span className="spinner" title={builder?.status || 'Its builder is working'} />}
+      {running && running.state !== 'stopped' && <span className="proto-tag">{running.state === 'importing' ? 'importing' : 'running'}</span>}
+      {!!running?.errors.length && <span className="warn-text small">{running.errors.length} error{running.errors.length > 1 ? 's' : ''}</span>}
+      {p.conflicts?.length ? <span className="warn-text small">conflicts</span> : null}
+      {p.verdict && <span className="proto-tag">{verdictLabel[p.verdict.kind]}</span>}
+    </div>
+  );
+}
+
 /** A card in full, beside the board. */
-function CardPanel({ card: c, goal, room, live, color, files, stamp, onClose, onOpen, onAskLead, onRemix, onRoom, onCommand }: {
+function CardPanel({ card: c, goal, room, live, color, files, stamp, onClose, onOpen, onAskLead, onRemix, onRoom, onCommand, onContinue, onStartOver }: {
   card: CanvasCard;
   goal: Goal;
   room: Room;
@@ -659,6 +734,8 @@ function CardPanel({ card: c, goal, room, live, color, files, stamp, onClose, on
   onRemix: () => void;
   onRoom: (id: string) => void;
   onCommand: Cmd;
+  onContinue?: (f: ContinueFrom) => void;
+  onStartOver: (p: PrototypeInfo) => void;
 }) {
   const [editing, setEditing] = useState<{ title: string; text: string }>();
   const k = kindOf(c.kind);
@@ -723,6 +800,7 @@ function CardPanel({ card: c, goal, room, live, color, files, stamp, onClose, on
             <img className="panel-image" src={`${mediaUrl(goal.id, c.file)}&v=${stamp}`} alt={c.title} />
           </a>
         )}
+        {c.prototype && <PrototypeBody goal={goal} card={c} room={room} live={live} onCommand={onCommand} onContinue={onContinue} onRoom={onRoom} onStartOver={onStartOver} />}
         {c.kind === 'demo' && c.file && (isGodot(c.file) ? <GodotPlayer goal={goal} file={c.file} run={room.godot[c.file]} onCommand={onCommand} /> : <DemoPlayer goal={goal} card={c} live={live} stamp={stamp} onCommand={onCommand} />)}
         {tunedFrom && (isGodot(tunedFrom.file!) ? <GodotPlayer goal={goal} file={tunedFrom.file!} run={room.godot[tunedFrom.file!]} onCommand={onCommand} /> : <DemoPlayer goal={goal} card={tunedFrom} live={false} stamp={stamp} start={c.values} />)}
         {c.url && (
@@ -757,7 +835,7 @@ function CardPanel({ card: c, goal, room, live, color, files, stamp, onClose, on
           <div className="panel-section">
             <div className="kicker">Made from</div>
             <div className="card-chips">{c.from.map(i => chip(i.id, i.take ? <i> — {i.take}</i> : null))}</div>
-            {live && (
+            {live && !c.prototype && (
               <button className="btn small" onClick={onRemix} title="Mix again: change what's taken from each card, swap a card, make more takes">
                 ⚗ Remix…
               </button>
@@ -810,12 +888,16 @@ function CardPanel({ card: c, goal, room, live, color, files, stamp, onClose, on
           <button className="btn small" onClick={onAskLead}>
             Ask the lead
           </button>
-          <button className="btn ghost small" onClick={() => op({ op: c.status === 'settled' ? 'reopen' : 'settle', id: c.id })}>
-            {c.status === 'settled' ? 'Reopen' : '✓ Settle'}
-          </button>
-          <button className="btn ghost small" onClick={() => op({ op: c.status === 'dropped' ? 'reopen' : 'drop', id: c.id })}>
-            {c.status === 'dropped' ? 'Reopen' : '✗ Drop'}
-          </button>
+          {!c.prototype && (
+            <>
+              <button className="btn ghost small" onClick={() => op({ op: c.status === 'settled' ? 'reopen' : 'settle', id: c.id })}>
+                {c.status === 'settled' ? 'Reopen' : '✓ Settle'}
+              </button>
+              <button className="btn ghost small" onClick={() => op({ op: c.status === 'dropped' ? 'reopen' : 'drop', id: c.id })}>
+                {c.status === 'dropped' ? 'Reopen' : '✗ Drop'}
+              </button>
+            </>
+          )}
           <button className="btn ghost small" onClick={() => setEditing({ title: c.title, text: c.text ?? '' })}>
             ✎ Edit
           </button>
@@ -824,9 +906,11 @@ function CardPanel({ card: c, goal, room, live, color, files, stamp, onClose, on
               Unframe
             </button>
           )}
-          <button className="btn ghost small danger" onClick={() => op({ op: 'remove', id: c.id })}>
-            Remove
-          </button>
+          {!c.prototype && (
+            <button className="btn ghost small danger" onClick={() => op({ op: 'remove', id: c.id })}>
+              Remove
+            </button>
+          )}
         </div>
       )}
     </aside>

@@ -25,6 +25,11 @@ export interface AgentReplay {
   parent: string;
   brief: string;
   quick: boolean;
+  /** A room's maker: what it's there for, and how it should look at things. */
+  responsibility?: string;
+  stance?: string;
+  /** Who asked it last, in a room: its answer goes there. */
+  askedBy?: string;
   cwd: string;
   worktree?: { path: string; branch: string; base: string; deps?: string[] };
   startedFrom?: string;
@@ -127,7 +132,8 @@ export function replayGoal(events: MhEvent[]): GoalReplay | undefined {
         const wt = str(x.worktree) ? { path: str(x.worktree), branch: str(x.branch), base: str(x.base), ...(deps ? { deps } : {}) } : undefined;
         g.agents.set(e.agent!, {
           name: e.agent!, role, harness: str(x.harness), model: str(x.model), effort: str(x.effort) || undefined, parent: e.parent ?? 'human',
-          brief: str(x.brief), quick: x.quick === true, cwd: str(x.cwd) || g.dir, worktree: wt,
+          brief: str(x.brief), quick: x.quick === true, responsibility: str(x.responsibility) || undefined, stance: str(x.stance) || undefined,
+          cwd: str(x.cwd) || g.dir, worktree: wt,
           startedFrom: str(x.startedFrom) || undefined, state: 'starting', status: '', lastText: '', undelivered: [],
         });
         if (!g.lead && led && (e.parent ?? 'human') === 'human') g.lead = e.agent!;
@@ -196,6 +202,13 @@ export function replayGoal(events: MhEvent[]): GoalReplay | undefined {
         break;
       case 'coordinator.usage':
         if (typeof x.total === 'number') g.coordinatorCost = x.total;
+        break;
+      case 'room.message':
+        // An ask sent to a maker: its answer goes back to whoever sent the last one.
+        if (x.kind === 'dispatch' && Array.isArray(x.to)) {
+          const to = g.agents.get(str(x.to[0]));
+          if (to) to.askedBy = x.from === 'human' ? 'human' : undefined;
+        }
         break;
       case 'message.sent':
         if (str(x.id) && str(x.to) && x.to !== 'human') {

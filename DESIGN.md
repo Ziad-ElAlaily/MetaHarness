@@ -1444,8 +1444,10 @@ mixes, and patches (the room's branch, Merge, the cartographer after it) were dr
 the same agents, sessions, events, costs and views (Graph, Sequence, Timeline, Costs, Files, Git,
 Design, Log). Its request is the topic. Everyone works in the human's checkout, reading; their
 own files go in the shared folder (`room/media/` for images, `room/demos/` for demos,
-`reports/`). It's one sitting: rooms aren't recovered after a daemon restart, but end then
-("New room from…" carries the board on).
+`reports/`). A room stays open until the human closes it: after a daemon restart it comes back
+with its chat, board and makers (2026-11-04; until then a room lasted one sitting). One that
+can't come back, its folder gone or its harness not here, ends, and "New room from…" carries the
+board on.
 
 - **The lead** is a role (Settings → Room lead, `roomLead`; built in: `room-lead` on Antigravity
   `gemini-3.8-flash-medium`, Claude Sonnet then Codex luna as backups). It's told the room's
@@ -1526,6 +1528,72 @@ own files go in the shared folder (`room/media/` for images, `room/demos/` for d
   (a message asking the lead for `shared/room/design.md`, citing the cards), *→ Goal*
   (`fromRoom`: the goal's lead is pointed at the board, its concept, decisions and kept values,
   demos and images, the design and the chat), *New room from this*.
+
+### Prototypes
+
+Rooms are mostly used to polish a game: several independent ideas about one thing, each worth
+playing on its own, then together, before anything is built for real. A **prototype**
+(`src/prototypes.ts`, added 2026-11-04, brainstorm → "go") is a playable game of its own: one card
+on the board however many versions it goes through, with a builder and a folder of its own, and
+it outlasts the room.
+
+- **Where it lives:** `~/.metaharness/prototypes/<project id>/<id>/`: `prototype.json` (the record:
+  versions, kept values, verdict, start), `process.md` (each ask and answer, written by the
+  daemon), `repo/` (its own git repository, with no remote), and the room's chat and board copied
+  when the room closes or a goal starts from it. Nothing is ever written in the project, and it
+  stays until the human deletes it (Rooms list, with what it takes on disk), whatever happens to
+  the room.
+- **Where it starts** depends on the request; the lead picks and says why (the `room-lead` role's
+  text, editable), or the human does. `game`: a frozen copy of the human's checkout or any git
+  worktree of the project (`room.checkouts`): `git clone --local`, then what isn't committed there
+  (changes, new files; not what git ignores) as one more commit. It's a clone and not a worktree so
+  the project's `.git` gets no branches or metadata. It never moves after that. `small`: a little
+  project on its own. A plain demo stays what it was, for a quick sketch. Ideas started together
+  share one freeze, so they start from the same commit, and each has Godot's import cache
+  copied in (reflinked where the disk can) rather than importing a whole game again.
+- **The tools commit:** every new prototype gets `.prototype/` (`NOTES.md`, the tuning panel) and
+  the panel's autoload line in `project.godot`, as a commit of its own. `base` on the record is
+  the commit after it, carried through forks and merges, so what production is told changed
+  doesn't include them. (`override.cfg` would have spared the line in `project.godot`, but Godot
+  ignores it when importing, and the game's scripts then fail to parse: tried with 4.7.1.)
+- **Builders:** `room.prototype` or the lead's `prototype` tool makes a maker per prototype, from
+  the room's first demo maker, with the prototype's id as its name and `prototype` on its lens: its
+  own session, so ideas neither wait for each other nor blend. It works in `repo/` (`cwd`), may
+  change anything there, read the project and other prototypes, and gets no write to the project's
+  `.git` and no git guard. `sendMaker` starts it, and asks go straight to it (the lead hears of
+  them). The makers bar leaves these out: they're on their cards.
+- **Versions:** a builder's turn ending commits its folder (`commitAll`), a new version tagged
+  `v<n>`, and reopens the game if it's running and `rerun` is on. Builders are told not to run
+  git. `room.prototypeRestore` goes back to a version as a new one on top; `room.prototypeFork`
+  starts a new prototype from any version, sharing its history. `.prototype/NOTES.md` travels with
+  the version; `scene.txt` there says where Run opens it. Both merge by union.
+- **Tuning:** `defaults/godot/mh_tune.gd`, an autoload called `MhTune`. The game asks for a value
+  every frame with `MhTune.knob(name, min, max, default, label)`, declaring it in the code that uses
+  it, so a merge has no central list to conflict on. F10 shows the sliders; they save to
+  `.prototype/tuning.json` (not in git). **Keep these values** writes `kept.json`, which
+  `refreshPrototypes` takes on the next poll: a decision card with the values, and a record on the
+  prototype.
+- **Merging:** `room.prototypeMergePreview` asks git, changing no files (`mergedTree`).
+  `room.prototypeMerge` clones the first at its version, then merges the others in turn. A conflict
+  stops there and goes to the new prototype's builder, who edits the files with no git commands; when
+  its turn ends with no markers left, MetaHarness commits the merge and carries on. A prototype with
+  no history in common can't be git-merged: its builder is pointed at it to port what it proves.
+  Kept values from all of them come along.
+- **Verdict:** the human's alone: keep, park or drop, what it taught them, at which version. Keep
+  settles the card and drop drops it. **Start over** is a new prototype of the same idea from
+  another starting point, with this one dropped.
+- **Production:** `goal.start` with `prototype` (and `version`, default the verdict's, else the
+  latest) makes a goal of its own, independent of the room: the room goes on, and may be deleted
+  later. Its shared folder gets `imported/prototype/<id>/`: `changes.diff` (`base` to that version,
+  tools left out), `NOTES.md` at that version, `process.md` (with what it was forked or merged from),
+  `values.json`, and the room's chat and board. Its agents may read the prototype's folder and play
+  it (`prototypeFrom`, kept in `goal.started`, gives them the read root). Its lead's brief says how
+  far the project has moved since the freeze. `defaults/rules/prototype-handoff.md`, a rule with
+  `when: prototype` and so only in these goals, says to reimplement rather than copy: prototypes may
+  cut corners and production may not.
+- **Carrying over:** a new room from cards that hold a prototype takes it over (`p.room`), with a
+  fresh builder reading the folder and notes; the old room can no longer ask it. One builder at a
+  time per prototype.
 
 The UI's **Rooms** tab opens on the open room. Its **Room** tab has the **chat** (you and the
 lead; a line for each ask sent to a maker, the lead's or yours, and each answer) beside the

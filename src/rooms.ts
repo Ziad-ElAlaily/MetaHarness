@@ -29,6 +29,8 @@ export interface Lens {
   stance?: string;
   /** Put away by the human: nobody can send it until it's back. */
   off?: boolean;
+  /** The prototype this maker builds, alone (design §21). */
+  prototype?: string;
 }
 
 /** A saved set of makers: casts/<name>.md. */
@@ -101,8 +103,8 @@ export const DEFAULT_MAKERS = ['researcher', 'illustrator', 'prototyper', 'write
  * reference); image: a picture; demo: a playable page; text: a write-up; concept: the idea as it
  * stands, pillar by pillar.
  */
-export type CardKind = 'question' | 'idea' | 'finding' | 'risk' | 'decision' | 'source' | 'image' | 'demo' | 'text' | 'concept';
-export const CARD_KINDS: CardKind[] = ['question', 'idea', 'finding', 'risk', 'decision', 'source', 'image', 'demo', 'text', 'concept'];
+export type CardKind = 'question' | 'idea' | 'finding' | 'risk' | 'decision' | 'source' | 'image' | 'demo' | 'text' | 'concept' | 'prototype';
+export const CARD_KINDS: CardKind[] = ['question', 'idea', 'finding', 'risk', 'decision', 'source', 'image', 'demo', 'text', 'concept', 'prototype'];
 const KIND_WORDS: Record<string, CardKind> = {
   option: 'idea', approach: 'idea', proposal: 'idea', direction: 'idea', fact: 'finding', evidence: 'finding', concern: 'risk', issue: 'risk', problem: 'risk', decided: 'decision',
   reference: 'source', link: 'source', web: 'source', picture: 'image', art: 'image', illustration: 'image', prototype: 'demo', playable: 'demo', sketch: 'demo',
@@ -166,6 +168,8 @@ export interface Card {
   notes?: { by: string; text: string }[];
   /** Rooms branched off from it. */
   branches?: string[];
+  /** A prototype's id: the card is the prototype, however many versions it goes through. */
+  prototype?: string;
 }
 
 export interface CardLink {
@@ -515,7 +519,7 @@ export function parseCanvasOps(raw: Record<string, unknown>): CanvasOp[] {
 }
 
 const HEADINGS: Record<CardKind, string> = {
-  question: 'Questions', idea: 'Ideas', finding: 'Findings', risk: 'Risks', decision: 'Decided', source: 'Sources', image: 'Images', demo: 'Demos', text: 'Write-ups', concept: 'Concepts',
+  question: 'Questions', idea: 'Ideas', finding: 'Findings', risk: 'Risks', decision: 'Decided', source: 'Sources', image: 'Images', demo: 'Demos', text: 'Write-ups', concept: 'Concepts', prototype: 'Prototypes',
 };
 
 /** The board as the agents read it: frame by frame, then the cards outside frames by kind, with ids, files, links and notes. */
@@ -526,6 +530,7 @@ export function canvasMarkdown(topic: string, c: Canvas, shared?: string): strin
     return [
       `- [${x.id}] (${x.kind}${x.status ? `, ${x.status}` : ''}${x.pending ? `, being made by ${x.pending}` : ''}) ${x.title}${out.length ? `  ${out.join(', ')}` : ''}  — ${x.by}`,
       ...(x.text ? [`  ${x.text.replace(/\n/g, '\n  ')}`] : []),
+      ...(x.prototype ? [`  prototype: ${x.prototype} (ask it with spawn, role: ${x.prototype})`] : []),
       ...(x.file ? [`  file: ${shared ? join(shared, x.file) : x.file}`] : []),
       ...(x.url ? [`  link: ${x.url}`] : []),
       ...(x.values ? [`  values: ${Object.entries(x.values).map(([k, v]) => `${k} = ${v}`).join(', ')}`] : []),
@@ -761,7 +766,7 @@ const MAKER_HOW: Record<Output, (paths: RoomPaths) => string[]> = {
 };
 
 /** What the lead does in a room: help the human get clear and decide, keep the board, send makers. */
-export function leadMethodology(o: { topic: string; paths: RoomPaths; lenses: string[] }): string {
+export function leadMethodology(o: { topic: string; paths: RoomPaths; lenses: string[]; prototypes?: string[] }): string {
   return [
     '## A brainstorm room',
     '',
@@ -789,6 +794,14 @@ export function leadMethodology(o: { topic: string; paths: RoomPaths; lenses: st
     '- For a demo of something the project already has, name the code to port (files, functions) so it feels like the real thing.',
     "- Don't `wait` for makers: end your turn instead. When one answers, say in a line or two what it made and what you suggest next.",
     '',
+    '### Prototypes',
+    "When several ideas are worth playing separately, each can be a prototype: a playable game of its own, kept outside the project, with its own builder and versions, tried and changed without touching the others. Start them with the `prototype` tool, and say which starting point you chose and why:",
+    '  {"action": "start", "ideas": [{"title": "Camera shake", "ask": "what to try", "card": "c3"}], "from": "game" | "small", "source": "a checkout or worktree (optional)"}: "game" freezes a copy of the game as it stands (all the ideas in one call share that copy, so they merge cleanly); "small" is a little project on its own.',
+    '  {"action": "fork", "id": "camera-shake", "version": 2, "title": "…", "ask": "…"}: a variation of one, from any version.',
+    '  {"action": "merge", "ids": ["camera-shake", "hit-stop"], "title": "…", "ask": "what to check"}: one prototype from several, to play them together. Git merges those from the same copy of the game; a builder settles any conflicts, or ports one that started elsewhere.',
+    "- To change one, ask its builder with `spawn` (role: the prototype's id). You don't hear of each change the human asks for directly: you're there to compare them, point out what's worth combining, and help decide. Only the human gives a prototype its verdict (keep, park, drop) and builds it for production; say what you'd do.",
+    ...(o.prototypes?.length ? ['The prototypes here now:', ...o.prototypes] : []),
+    '',
     '### Branching and endings',
     '- When the talk splits into a separate topic, suggest branching it: the human can branch any card into a room of its own.',
     `- When asked for the design, write it from the board, citing the cards it rests on by id. Reports and longer write-ups go in ${o.paths.reports}/. The whole chat is ${o.paths.chat}.`,
@@ -809,6 +822,29 @@ export function lensMethodology(o: { topic: string; lead: string; paths: RoomPat
     CANVAS_HOW,
     `- You read the code; you don't change it. Your own files go in the shared folder (${o.paths.media}/, ${o.paths.demos}/, ${o.paths.reports}/). Running things to check them is fine.`,
     '- Then call `done` with a short answer: what you made (the card ids) and anything worth knowing about it. Details go in the cards or a report, not the answer.',
+    `- Questions go to ${o.lead} (\`send\`): ${o.lead} talks with the human.`,
+  ].join('\n');
+}
+
+/** What a prototype's builder does: change its one prototype, turn by turn. */
+export function prototypeMethodology(o: { topic: string; lead: string; paths: RoomPaths; id: string; title: string; card?: string; repo: string; project: string; godot?: string; otherPrototypes: string }): string {
+  const at = o.godot ? `${o.godot}/` : '';
+  const folder = o.godot || '.';
+  return [
+    '## A prototype builder in a brainstorm room',
+    '',
+    `The human is brainstorming with ${o.lead}, the room's lead, about: ${o.topic}`,
+    `You build one prototype, "${o.title}", and nothing else: other ideas have builders of their own. The human asks you for changes directly, or through ${o.lead}. Each ask is a turn: do it, then answer.`,
+    '',
+    `- Your working directory, ${o.repo}, is the prototype: it's yours to change. It's a copy, kept outside the project. The real project, ${o.project}, is there to read, not to change; other prototypes are in ${o.otherPrototypes}.`,
+    "- MetaHarness commits your folder when your turn ends, and that's a new version the human can go back to or fork. Don't commit, merge or branch yourself.",
+    `- Keep ${at}.prototype/NOTES.md current, under its headings: what you tried, what the human rejected and why, and every shortcut you took. Whoever builds this for real reads it.`,
+    `- Tuning: wherever a value decides the feel, ask for it every frame with \`MhTune.knob("shake_amount", 0.0, 2.0, 0.5, "Shake amount")\` (name, min, max, default, label): a panel in the game (F10) gets a slider for it, and "Keep these values" puts them on the board. Name knobs after the real parameters and start them at their real values. Never draw sliders of your own.`,
+    `- If the human should land somewhere other than the main scene, write that scene on the first line of ${at}.prototype/scene.txt (res://…tscn), and the Run button opens it there.`,
+    `- Check before you answer: \`godot --headless --path ${folder} --import\`, then \`godot --headless --path ${folder} --quit-after 60\`, and fix any errors they print. The human opens it themselves: a button restarts it.`,
+    `- ${o.card ? `Your card on the board is ${o.card}: keep its text to what to try right now (\`canvas\`, {"op": "edit", "id": "${o.card}", "text": "…"}), and don't make other cards for the same prototype.` : "Say what to try in your answer."} Findings worth keeping can be cards of their own.`,
+    CANVAS_HOW,
+    '- Then call `done` with a short answer: what changed and what to try. Details go in the notes.',
     `- Questions go to ${o.lead} (\`send\`): ${o.lead} talks with the human.`,
   ].join('\n');
 }

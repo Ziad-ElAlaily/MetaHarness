@@ -26,6 +26,7 @@ const SCHEMAS: Record<(typeof TOOL_NAMES)[number], z.ZodType> = {
   workflow: z.looseObject({ name: z.string().optional() }),
   skill: z.looseObject({ name: z.string().optional(), part: z.string().optional() }),
   canvas: z.looseObject({ ops: z.union([z.array(z.looseObject({})), z.string()]).optional() }),
+  prototype: z.looseObject({ action: z.string().optional() }),
 };
 
 function describe(name: (typeof TOOL_NAMES)[number]): string {
@@ -43,7 +44,7 @@ function buildServer(d: Daemon, goal: string, agent: string): McpServer {
   const register = server.registerTool.bind(server) as unknown as Register;
   const room = !!d.goals.get(goal)?.room;
   for (const name of TOOL_NAMES) {
-    if (name === 'canvas' && !room) continue;
+    if ((name === 'canvas' || name === 'prototype') && !room) continue;
     if (name === 'dismiss' && room) continue;
     register(name, { description: describe(name), inputSchema: SCHEMAS[name] }, async args => ({
       content: [{ type: 'text', text: await d.hub.call(goal, agent, name, args) }],

@@ -339,6 +339,7 @@ function Shell() {
             loaded={loaded}
             config={config}
             onKind={k => go({ page: 'goals', item: k === 'room' ? 'rooms' : undefined })}
+            onContinue={from => setDialog({ kind: 'goal', from, request: `Build ${from.label} for production, from its prototype.` })}
             onNew={() => setDialog({ kind: allKind })}
             onOpen={(g, tab) => {
               // A goal from another project opens in it.
@@ -369,7 +370,7 @@ function Shell() {
             rooms={rooms}
             config={config}
             onNewRoom={from => setDialog({ kind: 'room', from })}
-            onContinue={from => setDialog({ kind: 'goal', from, ...(from.kind === 'room' ? { request: `Carry out what the room settled: ${from.label}` } : {}) })}
+            onContinue={from => setDialog({ kind: 'goal', from, ...(from.kind === 'room' ? { request: `Carry out what the room settled: ${from.label}` } : from.kind === 'prototype' ? { request: `Build ${from.label} for production, from its prototype.` } : {}) })}
             onSaveConfig={saveConfig}
             onAllGoals={() => go({ page: 'goals', item: undefined })}
             onAllRooms={() => go({ page: 'goals', item: 'rooms' })}

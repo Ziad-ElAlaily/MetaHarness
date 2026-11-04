@@ -11,6 +11,7 @@ const WHEN: { id: RuleWhen; label: string; hint: string }[] = [
   { id: 'commit', label: 'Committing', hint: 'When a commit of the agent’s (not a merge) changes matching files.' },
   { id: 'done', label: 'Calling done', hint: 'The first done comes back with this text; the next one goes through.' },
   { id: 'away', label: 'You go away', hint: 'When you say you’re away, to the agents at work then; in the prompt of those that start while you are.' },
+  { id: 'prototype', label: 'Built from a prototype', hint: 'In the prompt of every agent in a goal started from a prototype.' },
 ];
 const CHANGES: ChangeKind[] = ['added', 'modified', 'deleted', 'renamed'];
 

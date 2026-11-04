@@ -110,7 +110,9 @@ export function NewGoalForm({ config, onStart, onCancel, initialWorkflow = '', i
 export interface ContinueFrom {
   id: string;
   label: string;
-  kind: 'goal' | 'room';
+  kind: 'goal' | 'room' | 'prototype';
+  /** A prototype: the version to build. */
+  version?: number;
   action?: 'implement' | 'review' | 'continue';
   /** Documents to take along (relative to its shared folder); unset: the main one. */
   files?: string[];
@@ -134,10 +136,11 @@ export function keyDoc(docs: { path: string }[]): string | undefined {
 export function StartGoalDialog({ config, initialWorkflow, initialRequest, from, onClose, onStart }: { config?: ConfigView; initialWorkflow?: string; initialRequest?: string; from?: ContinueFrom; onClose: () => void; onStart: (b: Record<string, unknown>) => Promise<boolean> }) {
   const action = from?.action ? ACTIONS[from.action] : undefined;
   const [files, setFiles] = useState<string[]>();
-  const extra = !from ? undefined : from.kind === 'room' ? { fromRoom: from.id } : { from: from.id, files: files ?? [] };
+  const extra = !from ? undefined : from.kind === 'prototype' ? { prototype: from.id, version: from.version } : from.kind === 'room' ? { fromRoom: from.id } : { from: from.id, files: files ?? [] };
   return (
-    <Dialog title={!from ? 'New goal' : from.kind === 'room' ? 'New goal from the room' : `${action?.title ?? 'Continue from'}: ${from.label.slice(0, 60)}`} onClose={onClose} wide>
+    <Dialog title={!from ? 'New goal' : from.kind === 'prototype' ? `Build for production: ${from.label.slice(0, 60)}` : from.kind === 'room' ? 'New goal from the room' : `${action?.title ?? 'Continue from'}: ${from.label.slice(0, 60)}`} onClose={onClose} wide>
       {from?.kind === 'room' && <div className="dialog-body muted small">The room's board, its design if one was written, and the whole chat are copied into the new goal's shared folder, and the lead is pointed at them.</div>}
+      {from?.kind === 'prototype' && <div className="dialog-body muted small">A goal of its own, whatever happens to the room. It can read and play v{from.version}, and gets what it changed, its builder's notes and shortcuts, how it went and the values you kept. Prototypes cut corners, so it reimplements what this one proves to your project's standards.</div>}
       {from?.kind === 'goal' && <DocPicker goal={from.id} preset={from.files} picked={files} onPick={setFiles} />}
       <NewGoalForm config={config} onStart={onStart} onCancel={onClose} initialWorkflow={initialWorkflow} initialRequest={initialRequest ?? action?.request} extra={extra} autoFocus />
     </Dialog>

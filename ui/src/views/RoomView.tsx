@@ -10,6 +10,7 @@ import { agentColors } from '../agentColors.ts';
 import { FileSide } from './Files.tsx';
 import { fileMentions, filesNamed, type FileLinks } from '../fileLinks.tsx';
 import { Board } from './Board.tsx';
+import type { ContinueFrom } from '../components/Dialogs.tsx';
 import { isPhone, useBackCloses, useIsPhone } from '../phone.ts';
 
 interface Props {
@@ -27,6 +28,8 @@ interface Props {
   onBranch: (cards: CanvasCard[]) => void;
   /** Opens another room, e.g. one a card branched into. */
   onRoom: (id: string) => void;
+  /** A new goal from a prototype. */
+  onContinue?: (f: ContinueFrom) => void;
 }
 
 const busy = (a?: Agent) => !!a && ['starting', 'working'].includes(a.state);
@@ -37,7 +40,7 @@ const busy = (a?: Agent) => !!a && ['starting', 'working'].includes(a.state);
  * references and make images, demos and write-ups. Pick cards to mix them, ask about them,
  * frame, branch or settle them.
  */
-export default function RoomView({ goal, events, room, config, onCommand, onSelectAgent, file, onFile, onFilesTab, onBranch, onRoom }: Props) {
+export default function RoomView({ goal, events, room, config, onCommand, onSelectAgent, file, onFile, onFilesTab, onBranch, onRoom, onContinue }: Props) {
   const live = goal.live && goal.status !== 'ended';
   const color = useMemo(() => agentColors(goal), [goal]);
   const [about, setAbout] = useState<string>();
@@ -128,7 +131,7 @@ export default function RoomView({ goal, events, room, config, onCommand, onSele
       <Splitter pane="room-chat" grow="right" min={300} max={900} label="Chat" />
       <div className="room-board">
         <MakerBar goal={goal} room={room} config={config} live={live} color={color} onCommand={onCommand} onOpen={onSelectAgent} />
-        <Board goal={goal} room={room} live={live} color={color} files={files} onCommand={onCommand} onAskLead={setAbout} onBranch={ids => onBranch(room.cards.filter(c => ids.includes(c.id)))} onRoom={onRoom} />
+        <Board goal={goal} room={room} live={live} color={color} files={files} onCommand={onCommand} onAskLead={setAbout} onBranch={ids => onBranch(room.cards.filter(c => ids.includes(c.id)))} onRoom={onRoom} onContinue={onContinue} />
       </div>
     </div>
     </>
@@ -348,7 +351,7 @@ function MakerBar({ goal, room, config, live, color, onCommand, onOpen }: { goal
   return (
     <div className="lens-bar">
       <span className="kicker">Makers</span>
-      {room.lenses.map(p => {
+      {room.lenses.filter(p => !p.prototype).map(p => {
         const a = goal.agents.find(x => x.name === p.name);
         return (
           <div key={p.name} className={`lens-chip${busy(a) ? ' busy' : ''}${a ? '' : ' unstarted'}${p.off ? ' off' : ''}`} title={`${p.name}: ${lensWhat(p)}${a ? ` · ${a.harness}/${a.model}` : p.on ? ` · ${p.on}` : ''}${p.web ? ' · searches the web' : ''}${p.images ? ' · makes images' : ''}\n${p.responsibility ?? ''}${p.stance ? `\nStance: ${p.stance}` : ''}`}>
@@ -372,7 +375,7 @@ function MakerBar({ goal, room, config, live, color, onCommand, onOpen }: { goal
           </div>
         );
       })}
-      {!room.lenses.length && <span className="muted small">No makers: the lead can only talk.</span>}
+      {!room.lenses.some(p => !p.prototype) && <span className="muted small">No makers: the lead can only talk.</span>}
       {live && !adding && (
         <button className="btn small" onClick={() => setAdding({ role: config?.roles.some(r => r.name === 'writer') ? 'writer' : undefined })} title="Another role, the same role on another model, or just a model">
           + Maker

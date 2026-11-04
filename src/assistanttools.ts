@@ -15,9 +15,11 @@ type TextResult = { content: { type: 'text'; text: string }[] };
 type Register = (name: string, config: { description: string; inputSchema: z.ZodType }, cb: (args: any) => Promise<TextResult>) => unknown;
 
 const MAX = 24_000;
-const text = (v: unknown): TextResult => {
+/** The setup can't be narrowed, and cut short it isn't JSON any more and loses the settings and harnesses at its end. */
+const MAX_CONFIG = 120_000;
+const text = (v: unknown, max = MAX): TextResult => {
   const s = typeof v === 'string' ? v : JSON.stringify(v, null, 1);
-  return { content: [{ type: 'text', text: s.length > MAX ? `${s.slice(0, MAX)}\n…(cut at ${MAX} characters; narrow the request)` : s }] };
+  return { content: [{ type: 'text', text: s.length > max ? `${s.slice(0, max)}\n…(cut at ${max} characters; narrow the request)` : s }] };
 };
 const opt = z.string().optional();
 
@@ -29,11 +31,11 @@ export const GUIDE_PATH = join(import.meta.dirname, '..', 'GUIDE.md');
 export function buildAssistantServer(d: Daemon): McpServer {
   const server = new McpServer({ name: MCP_SERVER_NAME, version: '0.0.1' });
   const register = server.registerTool.bind(server) as unknown as Register;
-  const tool = (name: string, description: string, shape: Record<string, z.ZodType>, run: (a: any) => unknown) =>
+  const tool = (name: string, description: string, shape: Record<string, z.ZodType>, run: (a: any) => unknown, max = MAX) =>
     register(name, { description, inputSchema: z.looseObject(shape) }, async a => {
       d.assistantLog('assistant.tool', { tool: name, summary: JSON.stringify(a ?? {}).slice(0, 160) });
       try {
-        return text(await run(a ?? {}));
+        return text(await run(a ?? {}), max);
       } catch (e) {
         return text(`Error: ${(e as Error).message}`);
       }
@@ -136,7 +138,7 @@ export function buildAssistantServer(d: Daemon): McpServer {
       harnesses: c.harnesses.map(h => ({ id: h.id, title: h.title, runsHere: h.runnable, models: h.models, can: h.manifest })),
       accounts: d.snapshot().accounts,
     };
-  });
+  }, MAX_CONFIG);
 
   tool('guide', "MetaHarness's user guide: setup, roles, workflows, approvals, costs, harnesses, troubleshooting. With search, only the sections that mention it.", { search: opt }, a => {
     const guide = readFileSync(GUIDE_PATH, 'utf8');

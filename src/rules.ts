@@ -11,8 +11,8 @@ import type { ToolRequest } from './adapters/types.ts';
  * delivers what comes out.
  */
 
-export type RuleWhen = 'start' | 'path' | 'new-file' | 'commit' | 'done' | 'away';
-export const RULE_WHENS: RuleWhen[] = ['start', 'path', 'new-file', 'commit', 'done', 'away'];
+export type RuleWhen = 'start' | 'path' | 'new-file' | 'commit' | 'done' | 'away' | 'prototype';
+export const RULE_WHENS: RuleWhen[] = ['start', 'path', 'new-file', 'commit', 'done', 'away', 'prototype'];
 
 export type ChangeKind = 'added' | 'modified' | 'deleted' | 'renamed';
 const CHANGE_KINDS: ChangeKind[] = ['added', 'modified', 'deleted', 'renamed'];
@@ -344,16 +344,18 @@ const TRIGGER: Record<Exclude<RuleWhen, 'start'>, string> = {
   commit: 'when you commit',
   done: 'when you call done',
   away: 'when the human goes away',
+  prototype: 'in a goal built from a prototype',
 };
 
 /**
  * The Rules part of an agent's prompt: the start rules in full (and the away rules, while the
- * human is away), and a line for each of the others so the agent knows their notes will come.
+ * human is away, and the prototype rules, in a goal built from a prototype), and a line for each
+ * of the others so the agent knows their notes will come.
  * Empty when no rule is for this agent.
  */
-export function rulesPrompt(rules: Iterable<Rule>, a: RuleAgent, cwd: string, away = false): string {
-  const mine = [...rules].filter(r => !r.off && appliesTo(r, a) && holds(r, cwd));
-  const start = mine.filter(r => r.when === 'start' || (away && r.when === 'away'));
+export function rulesPrompt(rules: Iterable<Rule>, a: RuleAgent, cwd: string, away = false, fromPrototype = false): string {
+  const mine = [...rules].filter(r => !r.off && appliesTo(r, a) && holds(r, cwd) && (r.when !== 'prototype' || fromPrototype));
+  const start = mine.filter(r => r.when === 'start' || (away && r.when === 'away') || r.when === 'prototype');
   const later = mine.filter(r => !start.includes(r));
   if (!start.length && !later.length) return '';
   const parts = ['## Rules'];

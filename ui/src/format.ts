@@ -109,7 +109,7 @@ export function eventText(e: MhEvent): string {
   }
 }
 
-const RULE_MOMENT: Record<string, string> = { path: 'looking at', 'new-file': 'created', commit: 'committed', done: 'calling done', away: 'you went away' };
+const RULE_MOMENT: Record<string, string> = { path: 'looking at', 'new-file': 'created', commit: 'committed', done: 'calling done', away: 'you went away', prototype: 'built from a prototype' };
 
 /** The moment a rule or skill note came: "looking at src/api/orders.ts". */
 function moment(d: Record<string, any>): string {

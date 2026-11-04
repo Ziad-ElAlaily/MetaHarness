@@ -530,6 +530,30 @@ Home, or a room's header): what to talk about, and the makers.
   machine running MetaHarness, not on your phone if you're on one, and **■ Stop** closes it.
   Script errors show on the card. The tuning sliders are inside the game; tell the room what
   you want to keep. MetaHarness runs `godot` from the PATH: set `MH_GODOT` if yours is elsewhere.
+- **Prototypes** are for trying several ideas separately, usually when polishing a game. Pick the
+  idea cards and choose **▶ Prototype each…**, or **+ Prototype** (the lead can start them too, and
+  says why it chose what it did). Each gets its own builder and its own copy, kept by MetaHarness,
+  outside your project, so they all run at once without touching each other:
+  - **A copy of the game** is frozen as it stands, uncommitted work included, from your checkout
+    or any git worktree of it, and doesn't move after that. Ideas started together share one
+    freeze, so they merge cleanly. **A small project of its own** is quicker, for a mechanic away
+    from the game.
+  - Open its card: **▶ Run** opens the game in a window (and reopens it after each change, unless
+    you untick that), and you tell its builder what to change right there, without going through
+    the lead. Each answer is a new version: go **Back to this**, or **⑂ Fork** a variation from any
+    version.
+  - **F10 in the game** shows the sliders. **Keep these values** there puts them on the board as a
+    decision.
+  - **⚗ Merge…**, with two or more prototype cards picked, makes a new one with them all in it, to
+    play them together. It says first whether they merge cleanly; a builder settles conflicts.
+    Expect to tune again: independent ideas can still fight each other.
+  - **Verdict**: Keep, Park or Drop, and what it taught you. **→ Goal** starts a goal of its own that
+    builds it for production, whatever happens to the room. It can read and play that version, and
+    gets what it changed, its builder's notes and shortcuts, how it went and the values you kept.
+    Prototypes cut corners, so the goal reimplements; the rule that says so is
+    `prototype-handoff`, in Setup, for you to change.
+  - They stay until you delete them, even after the room closes: the **Rooms** list shows them with
+    what they take on disk. A new room from their cards takes them along.
 - **The concept card** is the idea as it stands, pillar by pillar (look, feel, mechanics,
   story…), each pointing at the cards it comes from. The lead keeps it as things settle. Only
   you decide: decision cards are what you agreed to.
@@ -541,7 +565,8 @@ Home, or a room's header): what to talk about, and the makers.
   generate images without asking in a room (you're watching; **■** stops one).
 - A room's tabs are **Room**, **Files** and **Costs**. Rooms open with the team and agent columns put away; click a name to slide its panel in, or
   bring the columns back with the toggles at the top right.
-- A room lasts one sitting: after a daemon restart, start a new room from it.
+- A room stays open until you close it: after a daemon restart it comes back, with its chat, board
+  and makers.
 
 ## 7. What agents can and can't do
 

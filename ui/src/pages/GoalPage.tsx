@@ -320,6 +320,7 @@ export function GoalPage(p: Props) {
                 onFilesTab={() => p.onTab('files')}
                 onBranch={cards => p.onNewRoom({ id: goal.id, label: goal.request.split('\n')[0], kind: 'room', topic: goal.request, lenses: roomView.lenses, cards: cards.map(c => ({ id: c.id, title: c.title })) })}
                 onRoom={p.onGoal}
+                onContinue={p.onContinue}
               />
             )}
             {finished && group === 'story' && (

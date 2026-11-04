@@ -642,6 +642,18 @@ Findings from the run:
   in Godot projects, with sliders inside the game. Web export was considered and left out. Checked
   with tests, with the real Godot 4.7.1 opening and closing a window through a scripted daemon, and
   the button in headless Chrome (against a stand-in Godot). Not yet tried with a real prototyper.
+- [x] **Parallel prototypes in a room** (2026-11-04, DESIGN.md §21). Ideas become prototypes kept
+  outside the project (`src/prototypes.ts`): one card each, with a builder of their own and git
+  versions; started from a freeze of a checkout or worktree (uncommitted work included), or a small
+  project; fork, go back, merge with a dry run first, a verdict, and a goal of its own that reads and
+  plays it (`defaults/rules/prototype-handoff.md`). A tuning panel inside the game
+  (`defaults/godot/mh_tune.gd`, F10) with Keep. Rooms now come back after a restart until closed.
+  Checked with tests against real git; the panel drawn by the real Godot 4.7.1 under Xvfb and its
+  `keep()` run in it; a frozen copy opened through Run with the real engine, headless; the whole flow
+  in headless Chrome against a scripted daemon. Not yet tried: real builders on a real harness
+  (whether each lets a builder write in its prototype folder while the project stays read-only), a
+  large game (the first import, the disk), Run opening a real window, and the sliders and Keep button
+  by hand.
 - [x] **Files in a message** (DESIGN.md §14, GUIDE.md §6). Attach by picker, drop or paste in an
   agent's conversation, Message the team, a room's chat, the assistant and Inbox answers. The file
   goes in the shared folder on sending, and the message names it, so nothing changes per harness. A
@@ -681,7 +693,7 @@ Findings from the run:
 ## Resuming work
 
 ```sh
-npm install && npm test        # 225 tests, about half a minute, no model calls
+npm install && npm test        # 237 tests, about half a minute, no model calls
 node src/cli.ts doctor         # what's installed and signed in here
 node src/cli.ts daemon --fake  # try it without spending anything
 ```

@@ -13,3 +13,7 @@ before anyone builds it: a jump, a camera, a combat beat, a menu transition.
 - The values that decide the feel are knobs the human tunes, named after the real parameters.
 - When the project already has the real thing, port its formulas, units and timestep exactly,
   so what feels right in the demo feels the same once it's built.
+- A prototype is yours alone and may cut corners: skip tests, polish and edge cases that don't
+  change how it plays, and write down each shortcut in its notes.
+- Keep an idea easy to merge with others: its scenes and scripts in a folder of their own, with
+  as few changes as you can to shared scenes, shared scripts and project settings.

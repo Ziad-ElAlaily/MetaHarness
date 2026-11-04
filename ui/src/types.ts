@@ -55,6 +55,8 @@ export interface CostSplit {
 
 export interface Goal {
   id: string;
+  /** The project it belongs to, while it's loaded. */
+  project?: string;
   /** room: a brainstorm with a lead, makers and a board; its request is the topic. */
   kind: 'goal' | 'room';
   request: string;
@@ -202,7 +204,7 @@ export interface WorkflowDef {
   body: string;
 }
 
-export type RuleWhen = 'start' | 'path' | 'new-file' | 'commit' | 'done' | 'away';
+export type RuleWhen = 'start' | 'path' | 'new-file' | 'commit' | 'done' | 'away' | 'prototype';
 export type ChangeKind = 'added' | 'modified' | 'deleted' | 'renamed';
 
 /** A note MetaHarness hands agents at a moment it can see (design §18). */
@@ -394,6 +396,8 @@ export interface Lens {
   stance?: string;
   /** Put away: nobody can send it. */
   off?: boolean;
+  /** The prototype it builds: it shows on the prototype's card, not with the makers. */
+  prototype?: string;
   /** As the room reports it: what it makes, and what its harness can do. */
   makes?: Output;
   web?: boolean;
@@ -414,7 +418,7 @@ export interface Cast {
   participants: Lens[];
 }
 
-export type CardKind = 'question' | 'idea' | 'finding' | 'risk' | 'decision' | 'source' | 'image' | 'demo' | 'text' | 'concept';
+export type CardKind = 'question' | 'idea' | 'finding' | 'risk' | 'decision' | 'source' | 'image' | 'demo' | 'text' | 'concept' | 'prototype';
 
 /** A card on a room's board (src/rooms.ts). */
 export interface CanvasCard {
@@ -440,6 +444,31 @@ export interface CanvasCard {
   notes?: { by: string; text: string }[];
   /** Rooms branched off from it. */
   branches?: string[];
+  /** The card is this prototype, however many versions it goes through. */
+  prototype?: string;
+}
+
+/** A playable idea from a room, kept outside the project (src/prototypes.ts). */
+export interface PrototypeInfo {
+  id: string;
+  title: string;
+  idea: string;
+  dir: string;
+  createdAt: string;
+  start:
+    | { kind: 'small' }
+    | { kind: 'game'; source: string; commit?: string; branch?: string; uncommitted: boolean }
+    | { kind: 'fork'; from: string; version: number }
+    | { kind: 'merge'; from: { id: string; version: number }[] };
+  versions: { n: number; sha: string; at: string; note: string }[];
+  godot?: string;
+  scene?: string;
+  kept: { version: number; values: Record<string, number>; at: string }[];
+  verdict?: { kind: 'keep' | 'park' | 'drop'; why?: string; version: number; at: string };
+  room?: string;
+  card?: string;
+  rerun: boolean;
+  conflicts?: string[];
 }
 
 /** A named group of cards on a room's board. */

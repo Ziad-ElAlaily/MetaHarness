@@ -4,8 +4,8 @@ import { skillList, skillPart, skillSummary } from './skills.ts';
 import { parseCanvasOps } from './rooms.ts';
 import type { AgentRec, Daemon, InboxEntry } from './daemon.ts';
 
-/** `canvas` is published only to agents in a brainstorm room, and `dismiss` only outside one. */
-export const TOOL_NAMES = ['team', 'spawn', 'respawn', 'dismiss', 'send', 'wait', 'status', 'done', 'workflow', 'skill', 'canvas'] as const;
+/** `canvas` and `prototype` are published only to agents in a brainstorm room, and `dismiss` only outside one. */
+export const TOOL_NAMES = ['team', 'spawn', 'respawn', 'dismiss', 'send', 'wait', 'status', 'done', 'workflow', 'skill', 'canvas', 'prototype'] as const;
 
 /** Descriptions the MCP layer will publish. Written for the agents that read them. */
 export const TOOL_DOCS: Record<(typeof TOOL_NAMES)[number], { description: string; params: Record<string, string> }> = {
@@ -68,6 +68,20 @@ export const TOOL_DOCS: Record<(typeof TOOL_NAMES)[number], { description: strin
     description: "Change the brainstorm room's board: cards (question, idea, finding, risk, decision, source, image, demo, text, concept), the links between them, and the frames that group them. Without ops, shows the whole board.",
     params: {
       ops: 'A list of changes: {"op": "add", "kind": "image", "title": "a few words", "text": "detail", "file": "room/media/x.png", "url": "https://…", "refs": ["src/x.ts:40"], "from": [{"id": "c2", "take": "its palette"}], "frame": "Look", "links": [{"to": "c2", "label": "answers"}], "ref": "a"}, {"op": "edit", "id": "c3", "title": "…", "file": "…", "pillars": [{"name": "Look", "text": "…", "cards": ["c3"]}]}, {"op": "settle" | "drop" | "reopen" | "remove", "id": "c3"}, {"op": "note", "id": "c3", "text": "…"}, {"op": "link", "from": "c4", "to": "c2", "label": "rules out"}, {"op": "unlink", "from": "c4", "to": "c2"}, {"op": "frame", "title": "Combat", "cards": ["c3", "c5"]}',
+    },
+  },
+  prototype: {
+    description: "The room's lead starts, forks or merges prototypes: playable games of their own, kept outside the project, each with its own builder and versions.",
+    params: {
+      action: 'start, fork or merge',
+      ideas: 'For start: [{"title": "a few words", "ask": "what to try", "card": "the card it comes from (optional)"}], one prototype each',
+      from: 'For start: game (a frozen copy of the game as it stands) or small (a little project of its own)',
+      source: 'For start from game: a checkout or git worktree of the project (optional; default the human\'s checkout)',
+      id: 'For fork: the prototype',
+      version: 'For fork: which version (optional; default its latest)',
+      ids: 'For merge: the prototypes, by id (or {"id": "…", "version": 3})',
+      title: 'For fork and merge: what to call the new one',
+      ask: 'For fork and merge: what to try',
     },
   },
 };
@@ -254,6 +268,9 @@ export class Hub {
 
       case 'canvas':
         return d.canvasTool(rec, parseCanvasOps(a));
+
+      case 'prototype':
+        return d.prototypeTool(rec, a);
 
       case 'done': {
         const note = str(pick(a, 'note', 'summary', 'text', 'result', 'message', 'answer')) ?? (rec.lastText || '(no note)');
