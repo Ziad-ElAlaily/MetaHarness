@@ -160,6 +160,7 @@ class FakeSession implements Session {
         mkdirSync(dirname(p), { recursive: true });
         writeFileSync(p, content);
         this.ev.toolCall('Write', p, { kind: 'edit' });
+        this.ev.toolResult('written', true);
       },
       writeFile: (relPath, content) => {
         const p = join(this.spec.cwd, relPath);

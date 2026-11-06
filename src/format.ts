@@ -99,7 +99,7 @@ export function eventLine(e: MhEvent): string {
     case 'goal.stalled':
       return `${t}  ${'goal'.padEnd(15)}⚠ stuck waiting: ${(d.agents as { name: string; minutes: number; why?: string }[]).map(a => `${a.name} (${a.minutes} min${a.why ? `, ${a.why}` : ''})`).join('; ')}; told ${d.told === 'human' ? 'you' : 'the lead'}`;
     case 'agent.moved':
-      return `${t}  ${who}moved from ${d.from.harness} · ${d.from.model} to ${d.to.harness} · ${d.to.model}: ${oneLine(d.reason)}`;
+      return `${t}  ${who}moved ${d.back ? 'back ' : ''}from ${d.from.harness} · ${d.from.model} to ${d.to.harness} · ${d.to.model}: ${oneLine(d.reason)}`;
     case 'agent.limited':
       return `${t}  ${who}rate limited on ${d.account}; continues at ${String(d.until).slice(11, 16)} UTC${d.known ? '' : ' (reset time unknown, will retry)'}`;
     case 'agent.interrupted':

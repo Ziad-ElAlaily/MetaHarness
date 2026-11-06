@@ -624,7 +624,11 @@ Home, or a room's header): what to talk about, and the makers.
   in its `uploads/` folder, and only whoever you sent them to is told.
 - **Rate limits.** Near a subscription's limit, agents are asked to write notes. At the limit,
   they wait for a reset that's close, or move to a backup from their role's `fallback`, picking
-  up from a handoff.
+  up from a handoff. Once the account they left frees (a limit check after its reset, or any
+  turn on it reporting it's fine), they move back to their role's own harness the same way: an
+  agent in a turn is asked for notes and switches after its current step, one between turns
+  switches with its next message, so no extra turn is spent. A teammate respawned on a route by
+  name (`on`) stays there.
 - **Full contexts.** When an agent's context window is 80% full (Settings), it's asked to write
   notes, then continues in a fresh session from a handoff: the goal, its brief, what it did, its
   team and where its work is. An agent between turns switches when its next message comes, so

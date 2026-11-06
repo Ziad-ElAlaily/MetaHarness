@@ -166,7 +166,14 @@ export interface AgentRec {
   /** The harness's last warning (a retry it's making, say), for a silence report. */
   lastWarning?: { text: string; at: number };
   /** Its context window is nearly full: it continues in a fresh session soon (see checkContext). */
-  refresh?: { since: number; pct: number; timer?: NodeJS.Timeout };
+  refresh?: { since: number; pct: number; timer?: NodeJS.Timeout; home?: Route };
+  /**
+   * The route its role prefers, while it runs on a backup because that route's account was at
+   * its limit. Once the account frees, it goes back there (headHome), through a handoff.
+   */
+  home?: Route;
+  /** Checks again whether its home route's account has freed, around the reset. */
+  homeTimer?: NodeJS.Timeout;
   /** Which rules it has had this session (design §18). A fresh session starts over. */
   rules: RuleState;
   /** Rule notes for an agent between turns: they ride along with whatever reaches it next. */
@@ -914,6 +921,7 @@ export class Daemon {
       adapter, gen: 0, token, systemPrompt: '', inbox: [], waiters: [], doneWaiters: [], pendingApprovals: 0, fileNotes: new Map(),
       toolsRunning: 0, lastToolEnd: 0, progressAt: Date.now(), rules: new RuleState(), ruleNotes: [],
       ...(parentRec ? { lastPartner: { name: parentRec.name, at: Date.now(), text: o.brief, sent: false } } : {}),
+      ...(picked.home && !o.quick ? { home: picked.home } : {}),
     };
     rec.systemPrompt = this.buildPrompt(g, rec, o.workflow, startedFrom);
     g.agents.set(name, rec);
@@ -921,7 +929,7 @@ export class Daemon {
     this.emit({
       goal: goalId, agent: name, parent: o.parent, type: 'agent.spawned',
       data: {
-        role: role.name, harness, model, ...(effort ? { effort } : {}), brief: o.brief, quick: !!o.quick, cwd, ...(o.responsibility ? { responsibility: o.responsibility } : {}), ...(o.stance ? { stance: o.stance } : {}),
+        role: role.name, harness, model, ...(effort ? { effort } : {}), ...(rec.home ? { home: rec.home } : {}), brief: o.brief, quick: !!o.quick, cwd, ...(o.responsibility ? { responsibility: o.responsibility } : {}), ...(o.stance ? { stance: o.stance } : {}),
         worktree: worktree?.path ?? null, branch: worktree?.branch ?? null, base: worktree?.base ?? null,
         ...(startedFrom ? { startedFrom } : {}), ...(deps.length ? { deps } : {}), ...(note ? { note } : {}),
       },
@@ -933,6 +941,7 @@ export class Daemon {
       rec.pendingBrief = brief;
       this.hitLimit(rec);
     } else this.startSession(rec, brief);
+    if (rec.home) this.watchHome(rec);
 
     return { ok: true, name, rec, guessedRole: res.guessed ? res.match : undefined, note };
   }
@@ -1003,7 +1012,7 @@ export class Daemon {
   }
 
   /** The first route that can run now; else the first that can run at all (it waits for its reset). */
-  private pickRoute(role: Role): { route: Route; note?: string } | { error: string } {
+  private pickRoute(role: Role): { route: Route; note?: string; home?: Route } | { error: string } {
     const all = this.routes(role);
     const runnable = all.filter(r => this.adapters[r.harness]);
     if (!runnable.length) {
@@ -1012,8 +1021,10 @@ export class Daemon {
     }
     const route = runnable.find(r => !this.accountLimited(r.harness, r.model)) ?? runnable[0];
     if (route === all[0]) return { route };
-    const why = this.adapters[all[0].harness] ? `${all[0].harness} is at its limit` : `MetaHarness can't run ${all[0].harness} yet`;
-    return { route, note: `${role.name} runs on its backup ${route.harness} · ${route.model}, because ${why}.` };
+    const limited = !!this.adapters[all[0].harness];
+    const why = limited ? `${all[0].harness} is at its limit` : `MetaHarness can't run ${all[0].harness} yet`;
+    // On a backup for a limit, it goes back to its first route once that frees.
+    return { route, note: `${role.name} runs on its backup ${route.harness} · ${route.model}, because ${why}.`, ...(limited ? { home: all[0] } : {}) };
   }
 
   /**
@@ -1593,7 +1604,8 @@ export class Daemon {
         log,
         // Its account's limit counts like a teammate's, so its next session starts on a backup.
         rateLimit: info => {
-          const { a, changed } = this.updateAccount(this.accountOf(route.harness, route.model), info);
+          const { a, changed, was } = this.updateAccount(this.accountOf(route.harness, route.model), info);
+          if (was === 'limited' && a.status !== 'limited') this.homeFreed(a.id);
           if (changed) log('account.limit', { account: a.id, status: a.status, usedPct: a.usedPct ?? null, resetsAt: a.resetsAt ? new Date(a.resetsAt).toISOString() : null, window: a.window ?? null, note: a.note ?? null });
         },
       },
@@ -1924,7 +1936,7 @@ export class Daemon {
       }
     }
     g.agents.set(old, {
-      ...rec, name: old, isLead: false, worktree: undefined, session: undefined, inbox: [], waiters: [], doneWaiters: [], fileNotes: new Map(), ruleNotes: [], pause: undefined, refresh: undefined, limitTimer: undefined,
+      ...rec, name: old, isLead: false, worktree: undefined, session: undefined, inbox: [], waiters: [], doneWaiters: [], fileNotes: new Map(), ruleNotes: [], pause: undefined, refresh: undefined, limitTimer: undefined, home: undefined, homeTimer: undefined,
       ...(silent === undefined ? {} : { state: 'ended' as const, toolsRunning: 0 }),
     });
     for (const i of this.humanInbox) if (i.goal === goalId && i.agent === name) i.agent = old;
@@ -1952,12 +1964,15 @@ export class Daemon {
       limitedUntil: undefined, interrupting: false, toolsRunning: 0, lastToolEnd: 0, held: undefined, waiters: [], doneWaiters: [], doneNote: undefined,
       pendingApprovals: 0, settledAt: undefined, progressAt: Date.now(), stallReported: undefined, resumeId: deferred ? undefined : resume,
       heardAt: undefined, silentReported: undefined, lastWarning: undefined,
+      // A route picked by name is where it stays; otherwise it still goes home once it can.
+      home: o.on ? undefined : rec.home,
     } satisfies Partial<AgentRec>);
+    if (o.on) clearTimeout(rec.homeTimer);
     const wt = rec.worktree;
     this.emit({
       goal: goalId, agent: name, parent: rec.parent, type: 'agent.spawned',
       data: {
-        role: rec.role.name, harness: rec.harness, model: rec.model, ...(rec.effort ? { effort: rec.effort } : {}), brief: rec.brief, quick: false, cwd: rec.cwd,
+        role: rec.role.name, harness: rec.harness, model: rec.model, ...(rec.effort ? { effort: rec.effort } : {}), ...(rec.home ? { home: rec.home } : {}), brief: rec.brief, quick: false, cwd: rec.cwd,
         worktree: wt?.path ?? null, branch: wt?.branch ?? null, base: wt?.base ?? null, ...(wt?.deps?.length ? { deps: wt.deps } : {}),
         replaces: old, by: o.by, resumed: !!resume,
       },
@@ -2753,6 +2768,8 @@ export class Daemon {
     const s = rec.session;
     if (rec.state === 'paused' || rec.state === 'limited' || FINISHED.includes(rec.state)) return;
     if (!s) {
+      // Let go while away on a backup, and its home is free: the message starts it there.
+      if (rec.refresh?.home) return this.refreshSession(rec);
       // Recovered after a restart without a running turn: resume its session with the messages.
       if (!rec.resumeId) return;
       if (this.accountLimited(rec.harness, rec.model)) return void this.hitLimit(rec);
@@ -3046,7 +3063,8 @@ export class Daemon {
   }
 
   private onRateLimit(rec: AgentRec, info: RateLimitInfo): void {
-    const { a, changed } = this.updateAccount(this.accountOf(rec.harness, rec.model), info);
+    const { a, changed, was } = this.updateAccount(this.accountOf(rec.harness, rec.model), info);
+    if (was === 'limited' && a.status !== 'limited') this.homeFreed(a.id);
     if (changed) {
       this.emit({
         goal: rec.goal, agent: rec.name, type: 'account.limit',
@@ -3095,6 +3113,7 @@ export class Daemon {
               if (was === 'limited' && a.status !== 'limited') {
                 for (const r of this.agentsOn(account)) if (r.state === 'limited') (clearTimeout(r.limitTimer), this.limitOver(r));
               }
+              if (a.status !== 'limited') this.homeFreed(account);
             }
             this.limitChecks.set(id, { at: Date.now() });
           },
@@ -3163,7 +3182,12 @@ export class Daemon {
     const soon = a?.resetsAt !== undefined && a.resetsAt - now <= this.limits.waitMaxMs;
     if (!soon) {
       const backup = this.routes(rec.role).find(r => this.adapters[r.harness] && !this.accountLimited(r.harness, r.model) && !(r.harness === rec.harness && r.model === rec.model));
-      if (backup) return this.move(rec, backup, `the ${account} account is at its limit`);
+      if (backup) {
+        // Where it goes back to: the route it was on, unless that was a backup already.
+        rec.home ??= { harness: rec.harness, model: rec.model, ...(rec.effort ? { effort: rec.effort } : {}) };
+        this.move(rec, backup, `the ${account} account is at its limit`);
+        return this.watchHome(rec);
+      }
     }
     const until = a?.resetsAt !== undefined && a.resetsAt > now ? a.resetsAt : now + this.limits.retryMs;
     rec.limitedUntil = until;
@@ -3190,7 +3214,7 @@ export class Daemon {
   private move(rec: AgentRec, to: Route, reason: string): void {
     const from = { harness: rec.harness, model: rec.model, ...(rec.effort ? { effort: rec.effort } : {}) };
     const brief = rec.pendingBrief ?? this.handoff(rec, from, reason);
-    this.emit({ goal: rec.goal, agent: rec.name, type: 'agent.moved', data: { from, to, reason } });
+    this.emit({ goal: rec.goal, agent: rec.name, type: 'agent.moved', data: { from, to, reason, ...(rec.home ? { home: rec.home } : {}) } });
     this.replaceSession(rec, to, brief);
     const g = this.goals.get(rec.goal)!;
     const line = `${rec.name} moved from ${from.harness} · ${from.model} to ${to.harness} · ${to.model}, because ${reason}. It continues from a handoff.`;
@@ -3198,6 +3222,82 @@ export class Daemon {
       const r = g.agents.get(who);
       if (r && r !== rec && !FINISHED.includes(r.state)) this.notice(r, line);
     }
+  }
+
+  /** True when an agent's home route can run again: its account isn't limited, nor about to be. */
+  private homeFree(rec: AgentRec): boolean {
+    const h = rec.home;
+    if (!h || !this.adapters[h.harness] || this.accountLimited(h.harness, h.model)) return false;
+    const a = this.accounts.get(this.accountOf(h.harness, h.model));
+    // Usage read before a reset that has since passed says nothing about the new window.
+    if (!a || (a.resetsAt !== undefined && a.resetsAt <= Date.now())) return true;
+    return (a.usedPct ?? 0) < this.limits.warnPct;
+  }
+
+  /**
+   * Checks again around the time its home route's account resets (or every retryMs when that's
+   * unknown), and sends it home once the account is free.
+   */
+  private watchHome(rec: AgentRec): void {
+    clearTimeout(rec.homeTimer);
+    rec.homeTimer = undefined;
+    const h = rec.home;
+    if (!h || FINISHED.includes(rec.state)) return;
+    const a = this.accounts.get(this.accountOf(h.harness, h.model));
+    const now = Date.now();
+    const at = this.homeFree(rec) ? now + this.limits.marginMs : a?.resetsAt !== undefined && a.resetsAt > now ? a.resetsAt + this.limits.marginMs : now + this.limits.retryMs;
+    rec.homeTimer = setTimeout(() => {
+      rec.homeTimer = undefined;
+      if (!rec.home || FINISHED.includes(rec.state)) return;
+      // A fresh reading, where the harness can give one: the reset time is only what it said before.
+      const check = this.adapters[h.harness]?.readLimits ? this.checkLimits(h.harness, true) : Promise.resolve();
+      void check.then(() => {
+        if (!this.headHome(rec)) this.watchHome(rec);
+      });
+    }, Math.max(0, at - now)).unref();
+  }
+
+  /** An account freed: its agents that are away on a backup head home. */
+  private homeFreed(account: string): void {
+    for (const g of this.goals.values()) {
+      for (const r of g.agents.values()) if (r.home && this.accountOf(r.home.harness, r.home.model) === account) this.headHome(r);
+    }
+  }
+
+  /**
+   * Sends an agent on a backup back to its home route, if that's free: as a fresh session from a
+   * handoff, like a full context. During a turn it's first asked to write notes, and the switch
+   * waits for the step to finish; between turns, its next message starts it, so no turn is spent.
+   * Waiting on a limit of its own, it goes now. Returns whether it's on its way.
+   */
+  private headHome(rec: AgentRec): boolean {
+    const h = rec.home;
+    if (!h || FINISHED.includes(rec.state) || rec.quick) return false;
+    if (h.harness === rec.harness && h.model === rec.model) {
+      rec.home = undefined;
+      return true;
+    }
+    if (!this.homeFree(rec)) return false;
+    if (rec.refresh?.home) return true;
+    clearTimeout(rec.homeTimer);
+    rec.homeTimer = undefined;
+    const busy = !!rec.session?.busy();
+    if (rec.refresh) clearInterval(rec.refresh.timer);
+    rec.refresh = { since: Date.now(), pct: rec.contextPct ?? 0, home: h };
+    if (rec.state === 'limited' || rec.pendingBrief !== undefined) {
+      this.refreshSession(rec);
+      return true;
+    }
+    if (!busy) return true;
+    const account = this.accountOf(h.harness, h.model);
+    this.notice(
+      rec,
+      `Your ${account} account has reset, so in a few minutes you'll continue on your role's own ${h.harness} · ${h.model}, from a handoff. ` +
+        `Write where you are to shared/notes/${rec.name}.md now: what's done, what's next, decisions and why, and anything uncommitted. ` +
+        `Then carry on with your current step; the switch waits until it's finished.`,
+    );
+    rec.refresh.timer = setInterval(() => this.refreshCheck(rec), this.pausing.tickMs).unref();
+    return true;
   }
 
   /**
@@ -3243,7 +3343,7 @@ export class Daemon {
     const pct = rec.contextPct;
     if (rec.refresh) {
       // The harness compacted it first.
-      if (pct !== undefined && pct < at) this.clearRefresh(rec);
+      if (pct !== undefined && pct < at && !rec.refresh.home) this.clearRefresh(rec);
       return;
     }
     if (!at || pct === undefined || pct < at || rec.quick || FINISHED.includes(rec.state)) return;
@@ -3296,6 +3396,16 @@ export class Daemon {
 
   /** The fresh session: same harness and model, a handoff for a brief, waiting messages added to it. */
   private refreshSession(rec: AgentRec): void {
+    const home = rec.refresh?.home;
+    if (home) {
+      // Its home filled up again meanwhile: it stays where it is.
+      if (!this.homeFree(rec)) {
+        this.clearRefresh(rec);
+        this.watchHome(rec);
+        return this.pump(rec);
+      }
+      return this.goHome(rec, home);
+    }
     const pct = rec.refresh?.pct ?? rec.contextPct;
     const entries = rec.inbox.splice(0);
     this.markDelivered(rec, entries, 'handoff');
@@ -3303,6 +3413,29 @@ export class Daemon {
     const brief = this.handoff(rec, route, `its context window was ${pct}% full`, { fresh: true, news: this.forAgent(rec, entries) });
     this.emit({ goal: rec.goal, agent: rec.name, type: 'agent.context_handoff', data: { pct: pct ?? null, contextTokens: rec.contextTokens ?? null, midTurn: !!rec.session?.busy() } });
     this.replaceSession(rec, route, brief);
+  }
+
+  /** The move back: a new session on its home route, from a handoff with its waiting messages. */
+  private goHome(rec: AgentRec, home: Route): void {
+    const from = { harness: rec.harness, model: rec.model, ...(rec.effort ? { effort: rec.effort } : {}) };
+    const account = this.accountOf(home.harness, home.model);
+    const reason = `the ${account} account is free again`;
+    const entries = rec.inbox.splice(0);
+    this.markDelivered(rec, entries, 'handoff');
+    const news = [rec.pendingBrief, this.forAgent(rec, entries)].filter(Boolean).join('\n') || undefined;
+    const brief = this.handoff(rec, from, reason, { news });
+    rec.pendingBrief = undefined;
+    rec.home = undefined;
+    clearTimeout(rec.homeTimer);
+    rec.homeTimer = undefined;
+    this.emit({ goal: rec.goal, agent: rec.name, type: 'agent.moved', data: { from, to: home, reason, back: true } });
+    this.replaceSession(rec, home, brief);
+    const g = this.goals.get(rec.goal)!;
+    const line = `${rec.name} moved back from ${from.harness} · ${from.model} to its own ${home.harness} · ${home.model}, because ${reason}. It continues from a handoff.`;
+    for (const who of new Set([rec.parent, g.lead])) {
+      const r = g.agents.get(who);
+      if (r && r !== rec && !FINISHED.includes(r.state)) this.notice(r, line);
+    }
   }
 
   /**
@@ -3585,6 +3718,7 @@ export class Daemon {
     rec.gen++;
     void rec.session?.stop();
     clearTimeout(rec.limitTimer);
+    clearTimeout(rec.homeTimer);
     this.endPause(rec);
     this.clearRefresh(rec);
     this.endStraysLater(rec);
@@ -4509,6 +4643,8 @@ export class Daemon {
     }
     this.emit({ goal: g.id, type: 'goal.recovered', data: { resumed, later } });
     for (const name of resumed) this.resumeAgent(g, g.agents.get(name)!, r.agents.get(name)!);
+    // Away on a backup: it goes home once that's free, checked again from now.
+    for (const rec of g.agents.values()) if (rec.home) this.watchHome(rec);
     return { resumed, later };
   }
 
@@ -4535,6 +4671,7 @@ export class Daemon {
       adapter: this.adapters[a.harness], resumeId: a.nativeSession, gen: 0, token, systemPrompt: '', doneNote: a.doneNote,
       inbox: [], waiters: [], doneWaiters: [], pendingApprovals: 0, fileNotes: new Map(), toolsRunning: 0, lastToolEnd: 0,
       progressAt: Date.now(), rules: new RuleState(), ruleNotes: [],
+      ...(a.home && !FINISHED.includes(a.state) ? { home: a.home } : {}),
     };
     rec.systemPrompt = this.buildPrompt(g, rec, g.workflow, a.startedFrom ?? 'its start point');
     return rec;

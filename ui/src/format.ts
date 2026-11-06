@@ -66,7 +66,7 @@ export function eventText(e: MhEvent): string {
     case 'agent.paused': return `paused by ${d.by === 'human' ? 'you' : d.by}`;
     case 'agent.resumed': return `resumed by ${d.by === 'human' ? 'you' : d.by}`;
     case 'agent.paused_between_steps': return `turn paused between steps${d.cut ? ' (a command ran too long and was cut)' : ''}`;
-    case 'agent.moved': return `moved to ${d.to.harness} · ${modelLabel(d.to)}: ${oneLine(d.reason)}`;
+    case 'agent.moved': return `moved ${d.back ? 'back ' : ''}to ${d.to.harness} · ${modelLabel(d.to)}: ${oneLine(d.reason)}`;
     case 'agent.context_full': return `context ${d.pct}% full${d.notesAsked ? ': asked to write notes before a fresh session' : ': a fresh session starts with its next message'}`;
     case 'agent.context_handoff': return `continues in a fresh session from a handoff (context was ${d.pct}% full)`;
     case 'agent.silent': return `⚠ nothing from its harness for ${d.minutes} min mid-turn${d.warning ? ` (last warning: ${oneLine(d.warning, 200)})` : ''}. Told ${d.told === 'human' ? 'you' : d.told}`;
