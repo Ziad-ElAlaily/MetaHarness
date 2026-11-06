@@ -24,6 +24,12 @@ test('read-only commands, including the ones that needed approval in the last re
     "for f in $(git ls-files | grep -v -i roles | grep -E '\\.(js|css)$'); do echo \"== $f\"; cat \"$f\"; done",
     "cat ../../shared/notes/review-view.md | sed -n '/ocus/,+15p' | head -30",
     'echo "branch: $(git rev-parse --abbrev-ref HEAD)" && echo $((1 + 2))',
+    // Finding who holds a test lock (refused while the human was away, in a real run).
+    "lslocks -o PID,COMMAND,PATH | rg 'suite.lock|PID'",
+    'fuser -v /tmp/ouha-suite.lock',
+    'flock -n /tmp/ouha-suite.lock true; echo lock_exit:$?',
+    "ps -eo pid,etime,args | rg 'godot' | head -20",
+    'pgrep -af flock; lsof /tmp/ouha-suite.lock',
   ]) {
     const v = readOnlyCommand(c);
     assert.ok(v.readOnly, `${c} → ${v.reason}`);
@@ -57,6 +63,12 @@ test('anything that could write, run other programs or change state still asks',
     ['cat <(ls)', /process substitution/],
     ['(cd x && ls)', /subshell/],
     ["echo 'unclosed", /quote/],
+    ['fuser -k /tmp/x.lock', /fuser that kills/],
+    ['fuser -TERM -k /tmp/x.lock', /fuser that kills/],
+    ['flock /tmp/x.lock true', /waits/],
+    ['flock -n /tmp/x.lock rm -rf build', /rm/],
+    ['flock -n /tmp/x.lock', /waits or keeps|keeps/],
+    ['pkill godot', /pkill/],
   ] as const) {
     const v = readOnlyCommand(c);
     assert.equal(v.readOnly, false, c);

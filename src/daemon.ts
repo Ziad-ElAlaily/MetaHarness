@@ -28,7 +28,7 @@ import { packFor, type FileDocs, type Highlights } from './languages.ts';
 import { configView, deleteFolder, deleteItem, saveFolder, saveGuide, saveMcp, saveRole, saveRule, saveWorkflow, type ScopeDir } from './configedit.ts';
 import { buildExport, importExport, parseExport, reviewImport, type ReviewContext } from './sharing.ts';
 import { loadProfiles } from './harnesses.ts';
-import { endTagged, settle, tagged, type Tagged } from './procs.ts';
+import { commandsOnly, endTagged, settle, tagged, type Tagged } from './procs.ts';
 import { foldEfforts, splitEffort, type EffortVariant } from './effort.ts';
 import { browse, folderSetup, forget, loadRegistry, nesting, Project, projectId, realDir, remember, within } from './projects.ts';
 import { matchesPaths, onAway, onCommit, onDone, onToolCall, rulesPrompt, RuleState, toolPaths, type Rule, type RuleAgent, type RuleNote, type ToolInfo } from './rules.ts';
@@ -129,6 +129,8 @@ export interface AgentRec {
   turnText?: string;
   /** Tool calls the harness reported as started and not yet finished, in the current turn. */
   toolsRunning: number;
+  /** When its current run of tool calls began (toolsRunning went above 0): what a cut command started is younger. */
+  busySince?: number;
   lastToolEnd: number;
   /** Messages are waiting to pause the running turn between steps (see pauseCheck). */
   pause?: { since: number; urgent: boolean; timer: NodeJS.Timeout };
@@ -269,6 +271,8 @@ export interface DaemonOptions {
   releaseMs?: number;
   /** How long after an agent's session ends what it left running is looked for and ended (default 6 seconds, once its CLI has had its chance to exit). */
   straysMs?: number;
+  /** How long after a command is cut short what it left running is ended. */
+  cutMs?: number;
   /** How long the goal branch stays quiet before what landed on it is announced (default a minute). */
   landedQuietMs?: number;
   /** How long close() waits for the harnesses' processes to exit before they're killed. */
@@ -471,6 +475,7 @@ export class Daemon {
   readonly contextNotesMs: number;
   private releaseMs: number;
   private straysMs: number;
+  private cutMs: number;
   private closeGraceMs: number;
   private landedQuietMs: number;
   /** Snapshots being taken, so close() waits for them. */
@@ -498,6 +503,7 @@ export class Daemon {
     this.contextNotesMs = o.contextNotesMs ?? 120_000;
     this.releaseMs = o.releaseMs ?? 10 * 60_000;
     this.straysMs = o.straysMs ?? 6000;
+    this.cutMs = o.cutMs ?? 2000;
     this.closeGraceMs = o.closeGraceMs ?? 3000;
     this.landedQuietMs = o.landedQuietMs ?? 60_000;
     this.away = readAway(o.home);
@@ -578,6 +584,25 @@ export class Daemon {
   }
 
   /** Folders you opened, the daemon's own, and those past goals worked in. */
+  /**
+   * What a personal role's or workflow's text says about one project in particular (its name or
+   * folder, as in a lock or log path), which every project's agents would then follow; else undefined.
+   */
+  private namesProjects(text: string): string | undefined {
+    const hits: string[] = [];
+    for (const dir of this.knownDirs()) {
+      const name = basename(dir);
+      const word = new RegExp(`(^|[^\\w-])${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w])`, 'i');
+      const m = text.includes(dir) ? dir : name.length >= 3 && word.test(text) ? name : undefined;
+      if (m) hits.push(m);
+    }
+    if (!hits.length) return undefined;
+    return (
+      `Note: it's personal, so it applies to every project, and it names ${hits.map(h => `"${h}"`).join(', ')}. ` +
+      "Commands, paths or locks meant for one project belong in that project's own folder; for a lock, use $MH_PROJECT_LOCK, which is each project's own."
+    );
+  }
+
   private knownDirs(): string[] {
     const fromGoals = this.store.ofType('goal.started').map(e => String(e.data.dir ?? '')).filter(d => d && existsSync(d));
     return [...new Set([...loadRegistry(this.home).map(e => e.dir), ...(this.defaultProject ? [this.defaultProject.dir] : []), ...fromGoals])];
@@ -936,7 +961,8 @@ export class Daemon {
           readRoots: [g.dir, join(this.home, 'goals', g.id), this.guardDir],
           denyRead: [...this.otherProjects(g), this.home],
           // MH_GOAL and MH_AGENT also mark what its commands start, so it can be found once they're done (endStraysLater).
-          env: { MH_GOAL: rec.goal, MH_AGENT: rec.name, ...(g.git ? guardEnv(this.guardDir, rec.worktree?.branch, g.git.repo, { goal: rec.goal, agent: rec.name }) : {}) },
+          // MH_PROJECT_LOCK is the project's own lock for runs that mustn't overlap (test suites), shared by its goals only.
+          env: { MH_GOAL: rec.goal, MH_AGENT: rec.name, MH_PROJECT_LOCK: projectLock(g.project), ...(g.git ? guardEnv(this.guardDir, rec.worktree?.branch, g.git.repo, { goal: rec.goal, agent: rec.name }) : {}) },
           sharedCheckout: this.sharedCheckout(rec),
           deniedCommands: deniedCommandPrefixes(this.sharedCheckout(rec)),
           approvals: this.approvalMode(rec),
@@ -1169,6 +1195,7 @@ export class Daemon {
       toolCall: (tool, summary, info) => {
         if (!live()) return;
         heard();
+        if (rec.toolsRunning <= 0) rec.busySince = Date.now();
         rec.toolsRunning++;
         rec.lastCallAt = Date.now();
         if (!WAITING_TOOLS.test(tool)) this.touch(rec);
@@ -1186,6 +1213,10 @@ export class Daemon {
         rec.toolsRunning = Math.max(0, rec.toolsRunning - 1);
         rec.lastToolEnd = Date.now();
         this.emit({ ...base, type: 'agent.tool_result', data: { summary, ok } });
+        // A command cut short (interrupted, timed out) may leave what it ran going, e.g. a test
+        // runner holding a lock. With nothing else of the agent's running, what started since its
+        // calls began is that command's.
+        if (!ok && rec.toolsRunning === 0 && rec.busySince !== undefined && CUT_COMMAND.test(summary)) this.endCutCommand(rec, rec.busySince, summary);
       },
       usage: u => {
         if (!live()) return;
@@ -1560,6 +1591,11 @@ export class Daemon {
           log('gatekeeper.usage', { ...u, costUsd: cost, total: this.gatekeeperCost(g) });
         },
         log,
+        // Its account's limit counts like a teammate's, so its next session starts on a backup.
+        rateLimit: info => {
+          const { a, changed } = this.updateAccount(this.accountOf(route.harness, route.model), info);
+          if (changed) log('account.limit', { account: a.id, status: a.status, usedPct: a.usedPct ?? null, resetsAt: a.resetsAt ? new Date(a.resetsAt).toISOString() : null, window: a.window ?? null, note: a.note ?? null });
+        },
       },
       this.gatekeeperLimits,
     );
@@ -3574,6 +3610,59 @@ export class Daemon {
   }
 
   /**
+   * After a command was cut short, ends what it started that is still running: processes of the
+   * agent's commands that started between `since` and now. Waits a moment first, as the harness
+   * may be ending them itself; tells the agent what went.
+   */
+  private endCutCommand(rec: AgentRec, since: number, summary: string): void {
+    const until = Date.now();
+    const gen = rec.gen;
+    setTimeout(() => {
+      if (rec.gen !== gen || this.closing) return;
+      const found = commandsOnly(tagged(new Set([rec.goal])).filter(p => p.agent === rec.name)).filter(p => p.startedAt !== undefined && p.startedAt >= since - 250 && p.startedAt <= until);
+      if (!found.length) return;
+      endTagged(found);
+      this.emit({ goal: rec.goal, agent: rec.name, type: 'procs.ended', data: { procs: found.map(strayData), reason: 'its command was cut short' } });
+      this.notice(rec, `Your command ended without finishing (${summary.slice(0, 80)}), and ${found.length === 1 ? 'a process it started was' : `${found.length} processes it started were`} still running, so MetaHarness ended ${found.length === 1 ? 'it' : 'them'}: ${found.map(p => p.command.slice(0, 80)).join('; ')}. Locks they held are free again.`);
+    }, this.cutMs).unref();
+  }
+
+  /**
+   * The processes this goal's agents' commands are running, for a teammate (the procs tool): whose,
+   * how old, what. With `end`, ends those among them the caller may end: its own, and, for the lead
+   * or the one who spawned their owner, its team's.
+   */
+  teamProcs(goalId: string, caller: string, end: number[] | 'mine' = []): string {
+    const g = this.goals.get(goalId);
+    const me = g?.agents.get(caller);
+    if (!g || !me) return `There's no agent ${caller} here.`;
+    const now = Date.now();
+    const procs = commandsOnly(tagged(new Set([goalId])));
+    const mayEnd = (p: Tagged) => p.agent === caller || me.isLead || g.agents.get(p.agent)?.parent === caller;
+    const age = (p: Tagged) => (p.startedAt === undefined ? '' : ` · ${running(now - p.startedAt)}`);
+    const line = (p: Tagged) => `- ${p.pid} ${p.agent || '?'}${age(p)}: ${p.command}`;
+    if (end === 'mine' || end.length) {
+      const wanted = end === 'mine' ? procs.filter(p => p.agent === caller) : procs.filter(p => end.includes(p.pid));
+      const unknown = end === 'mine' ? [] : end.filter(pid => !procs.some(p => p.pid === pid));
+      const refused = wanted.filter(p => !mayEnd(p));
+      const ending = wanted.filter(mayEnd);
+      if (ending.length) {
+        endTagged(ending);
+        for (const [agent, list] of Map.groupBy(ending, p => p.agent)) {
+          this.emit({ goal: goalId, agent, type: 'procs.ended', data: { procs: list.map(strayData), reason: `${caller} ended them` } });
+        }
+      }
+      return [
+        ending.length ? `Ended:\n${ending.map(line).join('\n')}` : 'Nothing was ended.',
+        ...(refused.length ? [`Not yours to end (ask their owner, or the lead):\n${refused.map(line).join('\n')}`] : []),
+        ...(unknown.length ? [`Not running, or not this team's: ${unknown.join(', ')}.`] : []),
+      ].join('\n');
+    }
+    if (!procs.length) return "None of the team's commands are running.";
+    return `What the team's commands are running (pid, whose, how long, what):\n${procs.map(line).join('\n')}`;
+  }
+
+  /**
    * What agents of an earlier daemon left running: every process tagged with a goal in the log
    * (a daemon that was killed never ended its agents' CLIs). Call once at startup, before any
    * agent starts, so none of it is this daemon's. Returns how many it ended.
@@ -5159,7 +5248,8 @@ export class Daemon {
           : deleteItem(scopes, b.cmd === 'role.delete' ? 'role' : b.cmd === 'rule.delete' ? 'rule' : 'workflow', b);
         this.reloadConfig();
         const what = String(b.cmd).endsWith('.delete') ? 'Deleted' : 'Saved';
-        return { result: `${what} ${file}. Agents started from now on use it.`, file, config: this.configView(b) };
+        const warning = b.scope === 'personal' && (b.cmd === 'role.save' || b.cmd === 'workflow.save') ? this.namesProjects(String(b.cmd === 'role.save' ? b.instructions ?? '' : b.body ?? '')) : undefined;
+        return { result: `${what} ${file}. Agents started from now on use it.${warning ? ` ${warning}` : ''}`, file, ...(warning ? { warning } : {}), config: this.configView(b) };
       }
       case 'folder.save':
       case 'folder.delete': {
@@ -5782,6 +5872,27 @@ function folderBytes(dir: string, seen = new Set<string>()): number {
   }
   return total;
 }
+
+/**
+ * The lock file a project's agents hold for runs that mustn't overlap, such as its test suite:
+ * one per project, so its goals take turns and other projects never wait on it. Named after the
+ * project, so lslocks shows whose it is.
+ */
+export function projectLock(p: { id: string; name: string }): string {
+  const slug = p.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'project';
+  return join(tmpdir(), `mh-${slug}-${p.id}.lock`);
+}
+
+/** How long something has been running: "40 s", "12 min", "1 h 23 min". */
+function running(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s} s`;
+  const min = Math.floor(s / 60);
+  return min < 60 ? `${min} min` : `${Math.floor(min / 60)} h ${min % 60} min`;
+}
+
+/** A command cut short, as harnesses report it: killed by a signal (130 SIGINT, 137 SIGKILL, 143 SIGTERM), interrupted, timed out. */
+const CUT_COMMAND = /\bexit(?: code)? (?:130|137|143)\b|interrupt|timed out|timeout|aborted|cancell?ed|killed/i;
 
 /** How long ago, for messages: "just now", "3 min ago". */
 /** Whether the human said they're away, kept across restarts in presence.json. */

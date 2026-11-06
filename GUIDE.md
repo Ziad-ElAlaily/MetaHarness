@@ -552,7 +552,10 @@ Home, or a room's header): what to talk about, and the makers.
     of the task, refuses what's plainly harmful, and sends you the rest with its reason. It's a
     role like any other: built in on Claude haiku (with Codex and Antigravity backups), and
     the Settings page writes it out as `roles/gatekeeper.md` if you want another model or
-    other rules. Teams can't spawn it, and its cost counts in the goal's.
+    other rules. Teams can't spawn it, and its cost counts in the goal's. When its account hits
+    its limit mid-session, that session goes (anything it still says counts for nothing) and the
+    request is asked again on a fresh one, which runs on a backup; only if that's limited too does
+    it come to you.
   - **Ask me:** everything else waits in your Inbox.
   - **Harness's own:** Claude Code's auto mode decides first; the gatekeeper, then you, for
     what it still asks about.
@@ -602,8 +605,17 @@ Home, or a room's header): what to talk about, and the makers.
   after its quiet spell) MetaHarness ends whatever still has its tag, and the goal's story says
   what. A daemon that was killed can't do this; the next one ends what its goals left running
   when it starts. `mh ps` lists what agents started that still runs, marking strays (their
-  agent's session is over); `mh ps --end` ends those now. Linux and macOS; Docker containers
-  belong to Docker and aren't found.
+  agent's session is over); `mh ps --end` ends those now. A command that comes back cut short
+  (interrupted, timed out) while nothing else of its agent runs has what it started ended a
+  moment later (Linux), and the agent is told: a hung test runner doesn't keep a lock for the
+  rest of the session. Agents have a `procs` tool too: it lists what the team's commands run
+  (whose, how long, what), and ends an agent's own, or, for the lead or their spawner, a
+  teammate's. Linux and macOS; Docker containers belong to Docker and aren't found.
+- **Test locks.** Every agent gets `MH_PROJECT_LOCK`, a lock file of its project's own
+  (`/tmp/mh-<project>-<id>.lock`). Runs that mustn't overlap take it:
+  `flock -w 1800 "$MH_PROJECT_LOCK" <test command>`. A project's goals take turns on it, and other
+  projects never wait on it. Write that in roles rather than a lock path of your own: a personal
+  role applies to every project, and saving one that names a project says so.
 - **Dependencies.** A worktree gets a hard-linked copy of your `node_modules` (and `vendor`), so
   tests run without installing. An agent that reinstalls only touches its copy.
 - **The shared folder** (`~/.metaharness/goals/<goal>/shared/`) holds designs, notes and

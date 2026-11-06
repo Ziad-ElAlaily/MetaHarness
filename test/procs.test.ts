@@ -117,3 +117,58 @@ test("what an agent's commands left running ends once its session does, and the 
   assert.ok(d.store.since(goal).some(e => e.type === 'procs.ended' && e.data.reason === 'left by the last daemon'));
   await d.close();
 });
+
+test('a command cut short has what it started ended, and what ran before it is left alone', { skip: process.platform !== 'linux' }, async () => {
+  const adapter = new FakeAdapter({
+    architect: async ctx => {
+      await ctx.tool('status', { text: 'ready' });
+      await ctx.sleep(300);
+      await ctx.run('flock -w 1800 /tmp/x.lock godot --script tests/_dbg.gd', 10_000);
+      await ctx.nextMessage(3000);
+    },
+  });
+  const d = makeTeam({ roles: { architect: '---\nharness: fake\nmodel: m\ngood_at: x\n---\nx\n' }, adapters: { fake: adapter }, cutMs: 50, pause: { graceMs: 0, settleMs: 0, maxWaitMs: 50, tickMs: 20 } });
+  const goal = d.startGoal({ request: 'r' });
+  const rec = () => d.agent(goal, 'architect')!;
+  const until = async (ok: () => boolean, what: string) => {
+    const end = Date.now() + 3000;
+    while (!ok() && Date.now() < end) await settle();
+    assert.ok(ok(), what);
+  };
+  await until(() => rec().status === 'ready', 'ready');
+  const server = await ghost(goal, 'architect'); // a dev server from before: not the cut command's
+  await until(() => rec().toolsRunning > 0, 'the command runs');
+  const hung = await ghost(goal, 'architect'); // what the command started, holding its lock
+  d.deliver(goal, 'human', 'architect', 'Stop', true);
+  assert.deepEqual(await gone([hung]), [], "the cut command's process is ended");
+  assert.ok(alive(server), 'what was running before is left alone');
+  const ev = d.store.since(goal).find(e => e.type === 'procs.ended')!;
+  assert.equal(ev.data.reason, 'its command was cut short');
+  assert.deepEqual((ev.data.procs as { pid: number }[]).map(p => p.pid), [hung]);
+  endTagged(tagged(new Set([goal])));
+  await d.close();
+});
+
+test("procs shows the team what its commands run, and ends only what the caller may end", { skip: process.platform !== 'linux' }, async () => {
+  const role = '---\nharness: fake\nmodel: m\ngood_at: x\n---\nx\n';
+  const adapter = new FakeAdapter({ '*': async ctx => void (await ctx.nextMessage(5000)) });
+  const d = makeTeam({ roles: { architect: role, implementer: role }, adapters: { fake: adapter } });
+  const goal = d.startGoal({ request: 'r' });
+  const impl = d.spawnAgent(goal, { role: 'implementer', brief: 'b', parent: 'architect' });
+  assert.ok(impl.ok);
+  const mine = await ghost(goal, impl.rec.name);
+  const leads = await ghost(goal, 'architect');
+  const listed = await d.hub.call(goal, 'architect', 'procs', {});
+  assert.match(listed, new RegExp(`- ${mine} ${impl.rec.name} · \\d+ s: sleep 302`));
+  assert.match(listed, new RegExp(`- ${leads} architect`));
+
+  const refused = await d.hub.call(goal, impl.rec.name, 'procs', { end: String(leads) });
+  assert.match(refused, /Nothing was ended[\s\S]*Not yours to end/);
+  assert.ok(alive(leads));
+  assert.match(await d.hub.call(goal, impl.rec.name, 'procs', { end: 'mine' }), new RegExp(`Ended:\\n- ${mine}`));
+  assert.deepEqual(await gone([mine]), []);
+  assert.match(await d.hub.call(goal, 'architect', 'procs', { end: `${leads}, 999999999` }), /Ended:[\s\S]*Not running, or not this team's: 999999999/);
+  assert.deepEqual(await gone([leads]), []);
+  assert.equal(await d.hub.call(goal, 'architect', 'procs', {}), "None of the team's commands are running.");
+  await d.close();
+});

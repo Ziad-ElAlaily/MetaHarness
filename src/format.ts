@@ -74,7 +74,7 @@ export function eventLine(e: MhEvent): string {
     case 'goal.cleaned':
       return `${t}  ${'goal'.padEnd(15)}cleaned${d.force ? ' (forced)' : ''}: ${d.removed.length} worktree(s) removed, ${d.deleted.length} branch(es) deleted${d.kept.length ? `, ${d.kept.length} kept` : ''}`;
     case 'procs.ended':
-      return `${t}  ${who}ended ${d.procs.length} process(es) ${d.reason === 'left by the last daemon' ? 'the last daemon left running' : 'left running'}: ${oneLine(d.procs.map((p: { command: string }) => p.command.split(' ')[0].split('/').pop()).join(', '), 100)}`;
+      return `${t}  ${who}ended ${d.procs.length} process(es) ${d.reason === 'left by the last daemon' ? 'the last daemon left running' : d.reason === 'its command was cut short' ? 'a cut-short command left running' : 'left running'}: ${oneLine(d.procs.map((p: { command: string }) => p.command.split(' ')[0].split('/').pop()).join(', '), 100)}`;
     case 'approval.refused':
       return `${t}  ${who}refused: ${oneLine(d.detail, 80)} (${oneLine(d.why, 80)})`;
     case 'approval.auto':

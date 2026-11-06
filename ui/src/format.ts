@@ -52,7 +52,7 @@ export function eventText(e: MhEvent): string {
     case 'goal.resumed': return 'Goal resumed';
     case 'goal.recovered': return `Picked up after a daemon restart${d.resumed?.length ? `: ${d.resumed.join(', ')} continue` : ''}`;
     case 'goal.cleaned': return `Cleaned up: ${d.removed.length} worktree(s) removed, ${d.deleted.length} branch(es) deleted${d.kept.length ? `, ${d.kept.length} kept` : ''}`;
-    case 'procs.ended': return `Ended ${d.procs.length} process(es) ${d.reason === 'left by the last daemon' ? 'the last daemon left running' : 'left running'}: ${oneLine(d.procs.map((p: { command: string }) => p.command).join('; '), 300)}`;
+    case 'procs.ended': return `Ended ${d.procs.length} process(es) ${d.reason === 'left by the last daemon' ? 'the last daemon left running' : d.reason === 'its command was cut short' ? 'a cut-short command left running' : 'left running'}: ${oneLine(d.procs.map((p: { command: string }) => p.command).join('; '), 300)}`;
     case 'agent.spawned': return `Spawned by ${e.parent === 'human' ? 'you' : e.parent} as ${d.role} (${d.harness} · ${modelLabel(d)})${d.quick ? ', quick helper' : ''}${d.branch ? ` on ${d.branch}` : ''}`;
     case 'agent.state': return `is ${STATE_LABEL[d.state as AgentState] ?? d.state}`;
     case 'agent.status': return `status: ${oneLine(d.text)}`;
