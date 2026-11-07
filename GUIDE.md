@@ -745,10 +745,11 @@ restarting the daemon. The pages write the same files described below.
   ```
 
   More keys: `sections:` (a file whose path sections come along), `include:` (a file whose
-  text follows), `requires:` / `missing:` (only while a file exists, or doesn't), `changes:` and
-  `unless_changed:` for commits, `edited: true` for done. To turn a rule off, flip its switch
-  (that writes `"rules": {"map": false}` into `settings.json`), or add a file of the same name
-  with `off: true`.
+  text follows), `requires:` / `missing:` (only while a file exists, or doesn't), `setting:`
+  (only while a setting is on, e.g. `setting: agentTools`), `changes:` and `unless_changed:` for
+  commits, `edited: true` for done. To turn a rule off, flip its switch, on its row in the
+  Rules list or in its editor (that writes `"rules": {"map": false}` into `settings.json`), or
+  add a file of the same name with `off: true`.
 - **Skills** are guides for a kind of work with files to go with them: a folder with a
   `SKILL.md`, in the format Claude Code, Codex and Antigravity share. Rules are for moments
   MetaHarness can see (a path, a new file, a commit); skills are for needs only the agent
@@ -772,6 +773,22 @@ restarting the daemon. The pages write the same files described below.
   give a rule a skill to point at (`skill: pdf-forms`, with `when: path` and `paths: forms/**`):
   its note names the skill when they open a form. A rule that grows long is usually better as
   a skill.
+- **Tools agents make** are skills too, written by agents for their own work: a sound they
+  can't hear, a scene they can't see, a job they'd otherwise do by hand. An agent asks the
+  **toolsmith** for one (`send` to `toolsmith`); if the team has none, MetaHarness starts one
+  with that message as its task and tells the lead. The toolsmith writes the tool in
+  `.metaharness/tools/<name>/` (a `SKILL.md` saying how to run it, and its scripts) and commits
+  it, and every agent can read it from then on. A lead can hand teammates the tools they'll need
+  (`spawn` with `tools: ["sfx-layer"]`), and agents using a tool hear when the toolsmith
+  changes it. On **Tools & skills**, *Made by agents* lists them with who made each one, for
+  whom and why, what it needs (`mh doctor` checks those programs too) and how often it's read.
+  **Move to my library** puts one in `~/.metaharness/tools/` for every project. Exports carry
+  tools like skills. The role (`toolsmith`, Opus) and the rule that tells agents to ask
+  (`tools`) are both in the default pack: edit them or turn them off like any other. Any role
+  can start this way: turn on *Starts when messaged* (`on_demand: true`). If tools go wrong,
+  turn off *Tools agents make* in **Settings** (`"agentTools": false`): agents stop seeing
+  the library, no toolsmith starts, and the `tools` rule goes quiet. The tools stay where they
+  are for when you turn it back on.
 - **Personal skills stay out.** Skills you installed for yourself (in `~/.claude/skills`, your
   Codex skills, `~/.gemini/config/skills`) are hidden from agents, so every harness on a team
   has the same ones. So are each harness's own copies of the repository's skills, which come

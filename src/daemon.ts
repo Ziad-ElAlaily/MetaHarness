@@ -36,7 +36,8 @@ import { endTagged, settle, tagged, type Tagged } from './procs.ts';
 import { foldEfforts, splitEffort, type EffortVariant } from './effort.ts';
 import { browse, folderSetup, forget, loadRegistry, nesting, Project, projectId, realDir, remember, within } from './projects.ts';
 import { BUILTIN_DIR, matchesPaths, onAway, onCommit, onDone, onToolCall, rulesPrompt, RuleState, toolPaths, type Rule, type RuleAgent, type RuleNote, type ToolInfo } from './rules.ts';
-import { claimedSkills, skillsFor, skillsPrompt, withSkills, type Skill } from './skills.ts';
+import { claimedSkills, skillsFor, skillsPrompt, toolKit, withSkills, type Skill } from './skills.ts';
+import { elevateTool, sameTool, toolsPrefix, toolsTouched } from './tools.ts';
 import {
   applyCanvas, branchCards, canvasMarkdown, castText, DEFAULT_MAKERS, demoPage, godotErrors, isGodotDemo, leadMethodology, lensLines, lensMethodology, lensName, makesOf, mixAsk, modelRole, parseCanvasOps, prototypeMethodology, RESPONSIBILITIES,
   responsibilityOf, seedCanvas, sharedPath,
@@ -175,6 +176,10 @@ export interface AgentRec {
   rules: RuleState;
   /** Rule notes for an agent between turns: they ride along with whatever reaches it next. */
   ruleNotes: string[];
+  /** Tools its spawner gave it (design §24): its prompt spells them out, besides its role's. */
+  tools: string[];
+  /** Tools it has read, so it hears when one changes. */
+  toolsUsed: Set<string>;
 }
 
 export interface GoalRec {
@@ -874,6 +879,10 @@ export class Daemon {
       responsibility?: string; stance?: string; askedBy?: string;
       /** A prototype's builder: it works in the prototype's folder. */
       prototype?: { id: string; cwd: string };
+      /** Tools for its kit, by name (design §24). */
+      tools?: string[];
+      /** An on-demand role started because this teammate messaged it. */
+      onDemandBy?: string;
     },
   ): SpawnResult {
     const g = this.goals.get(goalId);
@@ -887,6 +896,10 @@ export class Daemon {
     if (!o.roleDef && scope.workflows.length && this.teamRoles(g.project.config).some(r => r.name === o.role && !roleNames.includes(r.name))) {
       const which = scope.workflows.length > 1 ? `the ${scope.workflows.join(' and ')} workflows use` : `the ${scope.workflows[0]} workflow uses`;
       return { ok: false, error: `${o.role} isn't one of the roles ${which}. Roles you can spawn: ${roleNames.join(', ')}.` };
+    }
+    const { toolsmith, agentTools } = g.project.config.settings;
+    if (!agentTools && (o.roleDef?.name ?? o.role).trim().toLowerCase() === toolsmith.toLowerCase()) {
+      return { ok: false, error: `${toolsmith} can't be started: making and using tools is turned off in the settings (agentTools). Do the work without a tool.` };
     }
     if (!res.match) {
       const hint = res.suggestions.length ? ` Did you mean ${res.suggestions[0]}?` : '';
@@ -934,13 +947,29 @@ export class Daemon {
 
     if (o.prototype) cwd = o.prototype.cwd;
 
+    // Tools in its kit: those the library has, by name, with a typo forgiven; the rest are named back.
+    const library = [...g.project.config.skills.values()].filter(s => s.tool && !s.off).map(s => s.name);
+    const tools: string[] = [];
+    const unknownTools: string[] = [];
+    const toolsOff = !g.project.config.settings.agentTools;
+    for (const t of toolsOff ? [] : o.tools ?? []) {
+      const m = resolveName(t, library).match;
+      if (m) tools.includes(m) || tools.push(m);
+      else unknownTools.push(t);
+    }
+    if (toolsOff && o.tools?.length) note = [note, `Tools are turned off in the settings, so ${name} has none.`].filter(Boolean).join(' ');
+    if (unknownTools.length) {
+      const have = library.length ? `The tools are: ${library.join(', ')}.` : 'There are no tools yet: ask the toolsmith (send to: toolsmith) for one.';
+      note = [note, `There's no tool called ${unknownTools.join(', ')}, so ${name} doesn't have ${unknownTools.length > 1 ? 'them' : 'it'}. ${have}`].filter(Boolean).join(' ');
+    }
+
     const token = randomBytes(16).toString('hex');
     this.tokens.set(token, { goal: goalId, agent: name });
     const rec: AgentRec = {
       goal: goalId, name, role, harness, model, ...(effort ? { effort } : {}), parent: o.parent, brief: o.brief, ...(o.prototype ? { prototype: o.prototype.id } : {}), ...(o.responsibility ? { responsibility: o.responsibility } : {}), ...(o.stance ? { stance: o.stance } : {}), ...(o.askedBy ? { askedBy: o.askedBy } : {}),
       quick: !!o.quick, isLead: !!o.isLead, cwd, worktree, state: 'starting', status: '', lastText: '',
       adapter, gen: 0, token, systemPrompt: '', inbox: [], waiters: [], doneWaiters: [], pendingApprovals: 0, fileNotes: new Map(),
-      toolsRunning: 0, lastToolEnd: 0, progressAt: Date.now(), rules: new RuleState(), ruleNotes: [],
+      toolsRunning: 0, lastToolEnd: 0, progressAt: Date.now(), rules: new RuleState(), ruleNotes: [], tools, toolsUsed: new Set(),
       ...(parentRec ? { lastPartner: { name: parentRec.name, at: Date.now(), text: o.brief, sent: false } } : {}),
     };
     rec.systemPrompt = this.buildPrompt(g, rec, o.workflow, startedFrom);
@@ -952,6 +981,7 @@ export class Daemon {
         role: role.name, harness, model, ...(effort ? { effort } : {}), brief: o.brief, quick: !!o.quick, cwd, ...(o.responsibility ? { responsibility: o.responsibility } : {}), ...(o.stance ? { stance: o.stance } : {}),
         worktree: worktree?.path ?? null, branch: worktree?.branch ?? null, base: worktree?.base ?? null,
         ...(startedFrom ? { startedFrom } : {}), ...(deps.length ? { deps } : {}), ...(note ? { note } : {}),
+        ...(tools.length ? { tools } : {}), ...(o.onDemandBy ? { onDemandBy: o.onDemandBy } : {}),
       },
     });
 
@@ -1089,7 +1119,7 @@ export class Daemon {
     }
     const rules = rulesPrompt(this.agentRules(rec), ruleAgent(rec), rec.cwd, this.away && !g.room, !!g.prototypeFrom);
     if (rules) parts.push(rules);
-    const skills = skillsPrompt(this.skillsFor(rec));
+    const skills = skillsPrompt(this.skillsFor(rec), this.kitFor(rec));
     if (skills) parts.push(skills);
     parts.push(
       [
@@ -1555,8 +1585,8 @@ export class Daemon {
 
   /** Roles a team can spawn (in a project's config): all but the gatekeeper, the assistant and the room lead. */
   teamRoles(c: Config): Role[] {
-    const { gatekeeper, assistant, roomLead } = c.settings;
-    return [...c.roles.values()].filter(r => r.name !== gatekeeper && r.name !== assistant && r.name !== roomLead);
+    const { gatekeeper, assistant, roomLead, toolsmith, agentTools } = c.settings;
+    return [...c.roles.values()].filter(r => r.name !== gatekeeper && r.name !== assistant && r.name !== roomLead && (agentTools || r.name !== toolsmith));
   }
 
   /**
@@ -1984,6 +2014,7 @@ export class Daemon {
         role: rec.role.name, harness: rec.harness, model: rec.model, ...(rec.effort ? { effort: rec.effort } : {}), brief: rec.brief, quick: false, cwd: rec.cwd,
         ...(rec.responsibility ? { responsibility: rec.responsibility } : {}), ...(rec.stance ? { stance: rec.stance } : {}),
         worktree: wt?.path ?? null, branch: wt?.branch ?? null, base: wt?.base ?? null, ...(wt?.deps?.length ? { deps: wt.deps } : {}),
+        ...(rec.tools.length ? { tools: rec.tools } : {}),
         replaces: old, by: o.by, resumed: !!resume,
       },
     });
@@ -2096,6 +2127,8 @@ export class Daemon {
         });
         if (c.mergedSha) merged(c.mergedSha, c.sha);
         else if (owner) this.commitRules(g, gg, owner, c.sha);
+        // Tools are read from the checkout, so a change counts once it's on the branch the team shares.
+        if (landing) this.toolsCommitted(g, gg, owner, c.sha, c.summary, stats.paths);
       }
       if (fastForwarded) merged(fastForwarded, fastForwarded, true);
       if (landing) this.scheduleLanded(g, gg);
@@ -2482,13 +2515,86 @@ export class Daemon {
 
   /** The rules as an agent gets them: those pointing at a skill only when it carries the skill. */
   private agentRules(rec: AgentRec): Rule[] {
-    return withSkills(this.cfg(rec).rules.values(), this.skillsFor(rec));
+    const c = this.cfg(rec);
+    // A rule tied to a setting (setting: agentTools) is quiet while that setting is off.
+    const on = [...c.rules.values()].filter(r => !r.setting || (c.settings as unknown as Record<string, unknown>)[r.setting] !== false);
+    return withSkills(on, this.skillsFor(rec));
   }
 
   /** The skills an agent carries: those its role names, and those no role names; on, and for its harness. */
   skillsFor(rec: AgentRec): Skill[] {
     const c = this.cfg(rec);
-    return skillsFor(c.skills.values(), { harness: rec.harness, skills: rec.role.skills ?? [] }, claimedSkills(c.roles.values()));
+    // With agent tools off in the settings, agents don't see the library at all (design §24).
+    const library = [...c.skills.values()].filter(s => !s.tool || c.settings.agentTools);
+    return skillsFor(library, { harness: rec.harness, skills: rec.role.skills ?? [] }, claimedSkills(c.roles.values()));
+  }
+
+  /** The tools in an agent's kit: those it was given at spawn, then those its role names (design §24). */
+  kitFor(rec: AgentRec): Skill[] {
+    return toolKit(this.skillsFor(rec), rec.tools, rec.role.skills ?? []);
+  }
+
+  /**
+   * Reads the project's skills and tools again, for a tool the toolsmith wrote since the config
+   * was loaded. Only skills: roles and the rest still change for agents started from then on.
+   */
+  refreshTools(of: { goal: string } | GoalRec): void {
+    ('project' in of ? of : this.goals.get(of.goal)!).project.reloadSkills();
+  }
+
+  /** An agent read a tool: from now on it hears when the tool changes. */
+  toolRead(rec: AgentRec, tool: string): void {
+    rec.toolsUsed.add(tool);
+  }
+
+  /**
+   * A commit changed tools in the project's tools folder: the library is read again, the agents
+   * who carry or have read a changed tool hear of it, and the lead hears of a new one, so it can
+   * hand it to the teammates who need it. A note never wakes anyone.
+   */
+  private toolsCommitted(g: GoalRec, gg: git.GoalGit, by: string | undefined, sha: string, summary: string, paths: string[]): void {
+    const configDir = join(g.project.dir, '.metaharness');
+    const prefix = toolsPrefix(gg.repo, configDir);
+    const folders = toolsTouched(paths, prefix);
+    if (!folders.length) return;
+    if (!g.project.config.settings.agentTools) return void this.refreshTools(g);
+    const before = new Map([...g.project.config.skills.values()].filter(s => s.tool).map(s => [s.dir, s]));
+    this.refreshTools(g);
+    const after = [...g.project.config.skills.values()].filter(s => s.tool);
+    for (const folder of folders) {
+      const dir = join(configDir, 'tools', folder);
+      const now = after.find(s => s.dir === dir);
+      const was = before.get(dir);
+      const name = now?.name ?? was?.name ?? folder;
+      // New when the commit before had no such folder (a root commit has no commit before).
+      let existed = false;
+      try {
+        existed = git.git(gg.repo, 'ls-tree', '--name-only', `${sha}^`, '--', `${prefix}${folder}`) !== '';
+      } catch {
+        existed = false;
+      }
+      const isNew = !!now && !existed;
+      this.emit({ goal: g.id, agent: by, type: 'tool.changed', data: { tool: name, sha, summary, ...(isNew ? { new: true } : {}), ...(!now ? { removed: true } : {}) } });
+      const who = by ?? 'someone';
+      const commit = `commit ${sha.slice(0, 7)}: ${summary}`;
+      for (const a of g.agents.values()) {
+        if (a.name === by || a.quick || FINISHED.includes(a.state)) continue;
+        const holds = a.tools.includes(name) || a.toolsUsed.has(name) || (a.role.skills ?? []).includes(name);
+        if (holds) {
+          this.sideNote(a, !now
+            ? `[MetaHarness] The tool ${name} was removed by ${who} (${commit}).`
+            : `[MetaHarness] The tool ${name} was changed by ${who} (${commit}). Read it again with skill("${name}") before you next use it.`);
+        } else if (isNew && a.isLead) {
+          this.sideNote(a, `[MetaHarness] New tool from ${who}: ${name}: ${now!.description} Teammates can read it with skill("${name}"); name it in spawn's tools for those who'll need it.`);
+        }
+      }
+    }
+  }
+
+  /** A note for an agent: it joins a running turn, or waits for whatever reaches the agent next. */
+  private sideNote(rec: AgentRec, text: string): void {
+    if (rec.session?.busy() && !FINISHED.includes(rec.state)) this.notice(rec, text);
+    else rec.ruleNotes.push(text);
   }
 
   /** Path and new-file rules for one tool call. */
@@ -2644,6 +2750,9 @@ export class Daemon {
         ? 'Sent to the human for a decision. Their answer (approved, or what to change) will arrive as a message.'
         : 'Sent to the human. Their answer will arrive as a message.';
     }
+    // An on-demand role nobody on the team has (or whose agent was let go) starts with this as its task.
+    const started = this.onDemand(g, from, to, text);
+    if (started !== undefined) return started;
     const r = this.resolveRecipients(g, from, to);
     if ('error' in r) return r.error;
     const lines: string[] = [];
@@ -2686,6 +2795,44 @@ export class Daemon {
       lines.push(`${held.join(', ')} ${one ? 'has' : 'have'} finished, so this didn't wake ${one ? 'it' : 'them'}: ${one ? 'it' : 'they'}'ll see it if woken later. To wake one, send to it by name.`);
     }
     return [r.note, lines.join(' '), sent.length ? `Sent to ${sent.join(', ')}.` : ''].filter(Boolean).join(' ');
+  }
+
+  /**
+   * A message to an on-demand role (the toolsmith) that nobody on the team has: MetaHarness starts
+   * one in the checkout, reporting to the lead, with the message as its task, and tells the sender
+   * and the lead. One per goal: once one is on the team, messages reach it as any teammate's do.
+   * undefined when `to` isn't such a role.
+   */
+  private onDemand(g: GoalRec, from: string, to: string, text: string): string | undefined {
+    if (g.room) return undefined;
+    const c = g.project.config;
+    const smith = c.settings.toolsmith;
+    if (!c.settings.agentTools && resolveName(to, [smith]).match && ![...g.agents.values()].some(a => a.role.name === smith && a.state !== 'ended')) {
+      return `Making and using tools is turned off in the settings, so there's no ${smith} to ask. Do the work without a tool, or ask ${g.lead && g.lead !== from ? g.lead : 'the human'} if you're stuck.`;
+    }
+    const roles = this.teamRoles(c).filter(r => r.onDemand);
+    const res = resolveName(to, roles.map(r => r.name));
+    if (!res.match) return undefined;
+    // A teammate's own name always means that teammate.
+    if ([...g.agents.keys()].some(n => n.toLowerCase() === to.trim().toLowerCase())) return undefined;
+    const role = roles.find(r => r.name === res.match)!;
+    // A crashed one is for the lead to start again; only one that was let go is replaced.
+    if ([...g.agents.values()].some(a => a.role.name === role.name && a.state !== 'ended')) return undefined;
+    const sender = from === 'human' ? 'the human' : from;
+    const brief = `${sender} asked for this:\n\n${text}\n\nAnswer ${sender} with send (to: ${from}) when it's ready, and say so first if it will take a while. Others may send you requests too.`;
+    const parent = g.lead && g.agents.has(g.lead) ? g.lead : 'human';
+    const r = this.spawnAgent(g.id, { role: role.name, roleDef: role, brief, parent, worktree: false, onDemandBy: from });
+    if (!r.ok) return `${role.name} isn't on the team, and MetaHarness couldn't start one: ${r.error}`;
+    this.emit({ goal: g.id, agent: from, type: 'message.sent', data: { to: r.name, text, urgent: false, onDemand: true } });
+    const asker = g.agents.get(from);
+    if (asker) asker.lastPartner = { name: r.name, at: Date.now(), text, sent: true };
+    const lead = g.agents.get(parent);
+    if (lead && lead.name !== from) {
+      const ask = text.length > 300 ? `${text.slice(0, 300)}…` : text;
+      this.sideNote(lead, `[MetaHarness] ${sender} asked for ${role.name}, so MetaHarness started ${r.name} (it starts when messaged). The request: "${ask}" It reports to you when done; dismiss it once nobody needs it.`);
+    }
+    const guessed = res.guessed ? `(Took "${to}" to mean ${role.name}.) ` : '';
+    return `${guessed}${role.name} wasn't on the team, so MetaHarness started ${r.name} with your message as its task. It will answer you soon: carry on with something else, or wait on it.`;
   }
 
   /** Who stands in for an agent that has gone: the nearest one above it still going, or the human. */
@@ -5255,7 +5402,7 @@ export class Daemon {
       lastCallAt: a.lastCallAt, cacheMinutes: a.cacheMinutes, contextPct: a.contextPct, lastText: a.lastText,
       adapter: this.adapters[a.harness], resumeId: a.nativeSession, gen: 0, token, systemPrompt: '', doneNote: a.doneNote,
       inbox: [], waiters: [], doneWaiters: [], pendingApprovals: 0, fileNotes: new Map(), toolsRunning: 0, lastToolEnd: 0,
-      progressAt: Date.now(), rules: new RuleState(), ruleNotes: [],
+      progressAt: Date.now(), rules: new RuleState(), ruleNotes: [], tools: a.tools ?? [], toolsUsed: new Set(a.toolsUsed ?? []),
     };
     rec.systemPrompt = this.buildPrompt(g, rec, g.workflow, a.startedFrom ?? 'its start point');
     return rec;
@@ -6064,6 +6211,17 @@ export class Daemon {
         const parts = [`Imported ${r.imported.length} ${r.imported.length === 1 ? 'item' : 'items'}.`, r.unfilled.length ? `Still to fill in on Tools & skills: ${r.unfilled.join(', ')}.` : ''];
         return { ...r, result: parts.filter(Boolean).join(' '), config: this.configView(b) };
       }
+      case 'tool.elevate': {
+        // A project's tool moves to the personal library (design §24): only the human does this.
+        const { scopes, config, project } = this.setupOf(b);
+        const personal = scopes.find(x => x.scope === 'personal');
+        if (!project || !personal) throw new Error('Elevating moves a project’s tool to your personal library: open a project that has one.');
+        const tool = [...config.skills.values()].find(x => x.tool && x.name === s('name'));
+        if (!tool || tool.source !== 'repo') throw new Error(`There's no tool called ${s('name')} in this project${tool ? ': it’s in your personal library already' : ''}.`);
+        const r = elevateTool({ from: tool.dir, personalTools: join(personal.dir, 'tools'), repo: project.dir });
+        this.reloadConfig();
+        return { result: `Moved ${tool.name} to your personal library (${r.to}).${r.committed ? ` The project's copy is removed in commit ${r.committed}.` : ''}`, config: this.configView(b) };
+      }
       case 'settings.save': {
         const scope = this.setupOf(b).scopes.find(x => x.scope === b.scope);
         if (!scope) throw new Error(`There's no ${String(b.scope)} config folder here${b.scope === 'repo' ? ': open a project first' : ''}.`);
@@ -6241,10 +6399,27 @@ export class Daemon {
     };
     const casts = [...config.casts.values()].map(c => ({ name: c.name, goodAt: c.goodAt, participants: c.participants }));
     const responsibilities = RESPONSIBILITIES.map(r => ({ name: r.name, text: r.text, roles: r.roles, makes: r.makes }));
+    const view = configView(scopes);
+    const usage = this.toolUsage();
+    for (const s of view.skills) if (s.tool && usage.has(s.name)) s.usage = usage.get(s.name);
     return {
-      ...configView(scopes), harnesses, settings, casts, responsibilities, override: this.harnessOverride ?? null,
+      ...view, harnesses, settings, casts, responsibilities, override: this.harnessOverride ?? null,
       project: project ? { id: project.id, dir: project.dir, name: project.name } : null,
     };
+  }
+
+  /** How many agents have read each tool, across every goal, and when one last did (design §24). */
+  private toolUsage(): Map<string, { agents: number; last: string }> {
+    const by = new Map<string, { who: Set<string>; last: string }>();
+    for (const e of this.store.ofType('skill.read')) {
+      if (e.data.tool !== true) continue;
+      const name = String(e.data.skill);
+      const u = by.get(name) ?? { who: new Set(), last: '' };
+      u.who.add(`${e.goal}/${e.agent ?? ''}`);
+      u.last = e.ts;
+      by.set(name, u);
+    }
+    return new Map([...by].map(([k, u]) => [k, { agents: u.who.size, last: u.last }]));
   }
 
   /** The models a harness offers: those its profile knows, plus what its CLI lists (asked once every ten minutes). */

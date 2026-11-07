@@ -54,6 +54,9 @@ export interface AgentReplay {
   limitedUntil?: number;
   /** Messages sent to it that it never received. */
   undelivered: PendingMessage[];
+  /** The tools its spawner gave it, and those it has read (design §24). */
+  tools?: string[];
+  toolsUsed?: string[];
 }
 
 export interface InboxReplay {
@@ -135,6 +138,7 @@ export function replayGoal(events: MhEvent[]): GoalReplay | undefined {
           brief: str(x.brief), quick: x.quick === true, responsibility: str(x.responsibility) || undefined, stance: str(x.stance) || undefined,
           cwd: str(x.cwd) || g.dir, worktree: wt,
           startedFrom: str(x.startedFrom) || undefined, state: 'starting', status: '', lastText: '', undelivered: [],
+          ...(Array.isArray(x.tools) ? { tools: x.tools.map(String) } : {}),
         });
         if (!g.lead && led && (e.parent ?? 'human') === 'human') g.lead = e.agent!;
         if (wt) g.refs.set(wt.branch, wt.base);
@@ -209,6 +213,9 @@ export function replayGoal(events: MhEvent[]): GoalReplay | undefined {
           const to = g.agents.get(str(x.to[0]));
           if (to) to.askedBy = x.from === 'human' ? 'human' : undefined;
         }
+        break;
+      case 'skill.read':
+        if (a && x.tool === true && !(a.toolsUsed ??= []).includes(str(x.skill))) a.toolsUsed.push(str(x.skill));
         break;
       case 'message.sent':
         if (str(x.id) && str(x.to) && x.to !== 'human') {

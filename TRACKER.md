@@ -1,7 +1,7 @@
 # Tracker
 
 Where MetaHarness stands against the plan in [DESIGN.md §19](DESIGN.md). Update this file when a
-step lands. Last updated 2026-11-03.
+step lands. Last updated 2026-11-07.
 
 ## Milestone 0: a small team works ✅
 
@@ -673,6 +673,19 @@ Findings from the run:
   scripted agents, and through the CLI and the web app at desktop and phone width (headless). Not yet
   tried: a file sent to another real machine, or the Share button, which needs https and a browser
   that can share files.
+
+- [x] **Tools agents make** (DESIGN.md §24, GUIDE.md §8, brainstorm → "go" on 2026-11-07). Tools
+  are skills in `.metaharness/tools/` (personal: `~/.metaharness/tools/`), with where they came
+  from and what they need in their front matter. A built-in **toolsmith** role (Opus) starts on
+  the first message sent to it (`on_demand: true`, usable by any role), works in the checkout and
+  commits each tool alone; a default rule (`tools`) says when to ask. Every agent may read every
+  tool; `spawn(…, tools:)` and a role's `skills:` make an agent's kit, spelled out in its prompt.
+  A commit to a tool tells the agents who carry or read it, and the lead hears of new ones. The
+  Tools & skills page lists them apart, with usage and **Move to my library**; exports bring the
+  tools a tool uses and land them in `tools/`; `mh doctor` lists missing programs. Tested with
+  scripted agents and real git. Not yet tried: a real toolsmith on a real harness, the page by
+  hand. A Settings switch (`agentTools`) turns all of it off; rules got a `setting:` key, and a
+  switch on each row of the Rules list.
 
 ## Milestone 3: improve
 

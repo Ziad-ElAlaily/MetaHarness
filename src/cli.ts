@@ -319,7 +319,9 @@ async function main(): Promise<void> {
       console.log('Checking harnesses (this runs each CLI\'s own version, login and model commands)…\n');
       const reports = await Promise.all([...loadProfiles(configDirs()).values()].map(inspect));
       const cfg = loadConfig(configDirs());
-      for (const line of doctorLines(reports, [...cfg.roles.values()], cfg.mcp)) console.log(line);
+      const { missingPrograms } = await import('./skills.ts');
+      const tools = [...cfg.skills.values()].filter(t => t.tool && !t.off).map(t => ({ name: t.name, needs: t.needs, missing: missingPrograms(t.needs) }));
+      for (const line of doctorLines(reports, [...cfg.roles.values()], cfg.mcp, tools)) console.log(line);
       return;
     }
     case 'test': {

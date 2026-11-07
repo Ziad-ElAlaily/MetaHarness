@@ -5,7 +5,8 @@ import type { McpServerDef } from './mcpservers.ts';
 import type { Role } from './types.ts';
 import { BUILTIN_DIR, loadRuleFiles, loadRules, RULE_WHENS, type Rule } from './rules.ts';
 import { APPROVAL_MODES, loadSettings, type ApprovalMode } from './settings.ts';
-import { loadSkillFolder, loadSkills, skillFiles, skillLayers, type Skill, type SkillSource } from './skills.ts';
+import { loadSkillFolder, loadSkills, missingPrograms, skillFiles, skillLayers, type Skill, type SkillSource } from './skills.ts';
+import { sameTool } from './tools.ts';
 
 /**
  * Reading and writing the configuration from a client (the web app): roles, workflows, rules, the
@@ -72,6 +73,8 @@ export interface RoleView {
   permissionMode: string;
   allow: string[];
   nativeSkills: boolean;
+  /** Started when a teammate messages the role and nobody has it. */
+  onDemand: boolean;
 }
 
 export interface WorkflowView {
@@ -115,6 +118,12 @@ export interface SkillView extends Omit<Skill, 'off'> {
   carriedBy: string[];
   /** Rules that point at it. */
   pointedBy: string[];
+  /** A tool: the programs it needs that this machine doesn't have. */
+  missing: string[];
+  /** A project's tool that replaces a personal one: whether the two are the same (design §24). */
+  personalSame?: boolean;
+  /** A tool: how many agents have read it, across goals, and when one last did (filled in by the daemon). */
+  usage?: { agents: number; last: string };
 }
 
 export interface GuideView {
@@ -198,7 +207,7 @@ function roleView(r: Role, scope: RoleView['scope'], overrides?: RoleView['scope
   return {
     name: r.name, scope, file: r.file, ...(overrides ? { overrides } : {}), folder: r.folder ?? '', harness: r.harness, model: r.model, effort: r.effort ?? '', fallback: r.fallback, goodAt: r.goodAt,
     instructions: r.instructions, helper: r.helper, worktree: r.worktree, workflow: r.workflow ?? '', mcp: r.mcp, skills: r.skills ?? [], autoApprove: r.autoApprove, approvals: r.approvals ?? '',
-    permissionMode: r.permissionMode ?? '', allow: r.allow, nativeSkills: !!r.nativeSkills,
+    permissionMode: r.permissionMode ?? '', allow: r.allow, nativeSkills: !!r.nativeSkills, onDemand: !!r.onDemand,
   };
 }
 
@@ -241,10 +250,13 @@ function skillsView(scopes: ScopeDir[], roles: RoleView[], rules: RuleView[]): S
   for (const layer of layers) {
     for (const sk of loadSkillFolder(layer)) {
       const { off: _off, ...rest } = sk;
+      const before = out.get(sk.name);
       out.set(sk.name, {
-        ...rest, overrides: out.get(sk.name)?.source, on: !effective.get(sk.name)?.off, files: skillFiles(sk.dir, 40).files,
+        ...rest, overrides: before?.source, on: !effective.get(sk.name)?.off, files: skillFiles(sk.dir, 40).files,
         carriedBy: roles.filter(r => r.skills.includes(sk.name)).map(r => r.name),
         pointedBy: rules.filter(r => r.skill === sk.name).map(r => r.name),
+        missing: sk.tool ? missingPrograms(sk.needs) : [],
+        ...(sk.tool && before?.tool && before.source === 'personal' ? { personalSame: sameTool(sk.dir, before.dir) } : {}),
       });
     }
   }
@@ -275,7 +287,7 @@ function writeDoc(file: string, meta: [string, string][], body: string, keep = '
 }
 
 /** Keys the app writes for a role; anything else already in the file is kept as it was. */
-const ROLE_KEYS = ['harness', 'model', 'effort', 'fallback', 'fallbacks', 'good_at', 'helper', 'worktree', 'workflow', 'mcp', 'auto_approve', 'approvals', 'permission_mode', 'allow', 'native_skills', 'skills'];
+const ROLE_KEYS = ['harness', 'model', 'effort', 'fallback', 'fallbacks', 'good_at', 'helper', 'worktree', 'workflow', 'mcp', 'auto_approve', 'approvals', 'permission_mode', 'allow', 'native_skills', 'skills', 'on_demand'];
 
 const strList = (v: unknown): string[] => (Array.isArray(v) ? v : typeof v === 'string' ? v.split(',') : []).map(x => String(x).trim()).filter(Boolean);
 const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
@@ -336,6 +348,7 @@ export function saveRole(scopes: ScopeDir[], b: Record<string, unknown>): string
       ['permission_mode', str(b.permissionMode)],
       ['allow', allow.join(', ')],
       ['native_skills', b.nativeSkills === true ? 'true' : ''],
+      ['on_demand', b.onDemand === true ? 'true' : ''],
       ...extra,
     ],
     str(b.instructions),
@@ -368,7 +381,7 @@ export function saveWorkflow(scopes: ScopeDir[], b: Record<string, unknown>): st
 }
 
 /** Keys the app writes for a rule; anything else already in the file is kept as it was. */
-const RULE_KEYS = ['when', 'description', 'roles', 'paths', 'sections', 'include', 'requires', 'missing', 'changes', 'unless_changed', 'edited', 'off', 'skill'];
+const RULE_KEYS = ['when', 'description', 'roles', 'paths', 'sections', 'include', 'requires', 'missing', 'changes', 'unless_changed', 'edited', 'off', 'skill', 'setting'];
 
 /** Saves a rule as rules/<name>.md. Saving a built-in one into a folder makes a copy that replaces it there. */
 export function saveRule(scopes: ScopeDir[], b: Record<string, unknown>): string {
@@ -400,6 +413,7 @@ export function saveRule(scopes: ScopeDir[], b: Record<string, unknown>): string
       ['include', str(b.include)],
       ['requires', str(b.requires)],
       ['missing', str(b.missing)],
+      ['setting', str(b.setting)],
       ['changes', changes === 'added, modified, deleted, renamed' ? '' : changes],
       ['unless_changed', str(b.unlessChanged)],
       ['edited', b.edited === true ? 'true' : ''],

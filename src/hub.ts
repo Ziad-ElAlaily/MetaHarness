@@ -19,6 +19,7 @@ export const TOOL_DOCS: Record<(typeof TOOL_NAMES)[number], { description: strin
       name: 'Optional name',
       worktree: "true to give them their own git worktree and branch, for code written in parallel with others. Default: they work in the shared folder, like everyone else",
       from: "Optional: a teammate (or branch) whose latest commit their own worktree starts from, e.g. the implementer whose code a reviewer checks. Implies worktree",
+      tools: 'Optional: tools from the library to put in their kit, by name, e.g. ["sfx-layer", "spectrogram"]. Their prompt spells these out; they can still read any other tool',
     },
   },
   respawn: {
@@ -61,7 +62,7 @@ export const TOOL_DOCS: Record<(typeof TOOL_NAMES)[number], { description: strin
     params: { name: 'Workflow name (optional)' },
   },
   skill: {
-    description: 'Read a skill: a guide for a kind of work, with files. With a name, a summary: what it is for, its sections and its files. With part, one section (by heading) or file (by path). Without a name, lists the skills for your role.',
+    description: 'Read a skill or a tool: a guide for a kind of work, with files, or a program teammates made, with how to use it. With a name, a summary: what it is for, its sections and its files. With part, one section (by heading) or file (by path). Without a name, lists the skills for your role and the tools in the library.',
     params: { name: 'Skill name (optional)', part: 'A section heading or a file path from the summary (optional)' },
   },
   canvas: {
@@ -180,12 +181,15 @@ export class Hub {
         const from = str(pick(a, 'from', 'base', 'branch', 'start_from', 'starting_from'));
         const wt = pick(a, 'worktree', 'own_worktree', 'isolated', 'isolation');
         const worktree = wt === undefined ? undefined : truthy(wt) || /^worktree$/i.test(String(wt));
-        const r = d.spawnAgent(rec.goal, { role, brief, parent: rec.name, name, from, worktree });
+        const toolsArg = pick(a, 'tools', 'kit', 'tool');
+        const tools = (Array.isArray(toolsArg) ? toolsArg.map(String) : String(toolsArg ?? '').split(',')).map(t => t.trim()).filter(Boolean);
+        const r = d.spawnAgent(rec.goal, { role, brief, parent: rec.name, name, from, worktree, tools });
         if (!r.ok) return r.error;
         const guessed = r.guessedRole ? `(Took "${role}" to mean ${r.guessedRole}.) ` : '';
         const where = r.rec.worktree ? ` in its own worktree on branch ${r.rec.worktree.branch}, from ${r.rec.worktree.base.slice(0, 7)}` : ' in the shared folder';
         const backup = r.note ? ` ${r.note}` : '';
-        return `${guessed}Started ${r.name} (${r.rec.harness} · ${r.rec.model})${where}.${backup} Its result will reach you when it calls done; use wait to block until then.`;
+        const kit = r.rec.tools.length ? ` Its kit: ${r.rec.tools.join(', ')}.` : '';
+        return `${guessed}Started ${r.name} (${r.rec.harness} · ${r.rec.model})${where}.${kit}${backup} Its result will reach you when it calls done; use wait to block until then.`;
       }
 
       case 'respawn': {
@@ -252,16 +256,26 @@ export class Hub {
       case 'skill': {
         const want = str(pick(a, 'name', 'skill', 'text'));
         const part = str(pick(a, 'part', 'section', 'file', 'path', 'heading'));
-        const mine = d.skillsFor(rec);
-        if (!want) return skillList(mine);
-        const r = resolveName(want, mine.map(s => s.name));
+        let mine = d.skillsFor(rec);
+        if (!want) return skillList(mine, d.kitFor(rec));
+        let r = resolveName(want, mine.map(s => s.name));
+        // A tool the toolsmith wrote since the library was read.
+        if (!r.match || r.guessed) {
+          d.refreshTools(rec);
+          mine = d.skillsFor(rec);
+          r = resolveName(want, mine.map(s => s.name));
+        }
         if (!r.match) {
           const other = d.cfg(rec).skills.get(want);
-          const why = !other ? `There's no skill called "${want}".` : other.off ? `The skill ${want} is turned off.` : `Your role (${rec.role.name} on ${rec.harness}) doesn't carry the skill ${want}.`;
-          return `${why} ${skillList(mine)}`;
+          const why = !other ? `There's no skill called "${want}".`
+            : other.tool && !d.cfg(rec).settings.agentTools ? `Tools are turned off in the settings, so ${want} can't be used. Do the work without it.`
+            : other.off ? `The ${other.tool ? 'tool' : 'skill'} ${want} is turned off.`
+            : `Your role (${rec.role.name} on ${rec.harness}) doesn't carry the skill ${want}.`;
+          return `${why} ${skillList(mine, d.kitFor(rec))}`;
         }
         const sk = mine.find(s => s.name === r.match)!;
-        d.emit({ goal: rec.goal, agent: rec.name, type: 'skill.read', data: { skill: sk.name, ...(part ? { part } : {}) } });
+        if (sk.tool) d.toolRead(rec, sk.name);
+        d.emit({ goal: rec.goal, agent: rec.name, type: 'skill.read', data: { skill: sk.name, ...(part ? { part } : {}), ...(sk.tool ? { tool: true } : {}) } });
         const text = part ? skillPart(sk, part) : skillSummary(sk);
         return `${r.guessed ? `(Took "${want}" to mean ${sk.name}.)\n` : ''}${text}`;
       }
@@ -306,7 +320,13 @@ export class Hub {
     }
     const { roles, workflows } = this.d.rolesFor(rec, this.d.cfg(rec));
     lines.push('', workflows.length ? `Roles you can spawn (the ones ${workflows.join(' and ')} ${workflows.length > 1 ? 'use' : 'uses'}, and quick helpers):` : 'Roles you can spawn:');
-    for (const r of roles) lines.push(`- ${r.name}${r.helper ? ' (quick helper)' : ''}: ${r.goodAt || '—'}`);
+    for (const r of roles) lines.push(`- ${r.name}${r.helper ? ' (quick helper)' : ''}${r.onDemand ? ' (starts when messaged)' : ''}: ${r.goodAt || '—'}`);
+    // On-demand roles start when messaged, whatever the workflow names.
+    const onDemand = this.d.teamRoles(this.d.cfg(rec)).filter(r => r.onDemand && !roles.includes(r));
+    if (onDemand.length) {
+      lines.push('', 'Roles that start when you message them (send to: the role):');
+      for (const r of onDemand) lines.push(`- ${r.name}: ${r.goodAt || '—'}`);
+    }
     return lines.join('\n');
   }
 }

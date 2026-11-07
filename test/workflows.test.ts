@@ -151,7 +151,7 @@ test("a workflow's roles are the ones its lead can start; chaining to another ad
   );
   const goal = d.startGoal({ request: 'r', workflow: 'build' });
   await withTimeout((async () => { while (!said.reviewer) await settle(); })(), 3000, 'the lead to finish');
-  assert.match(said.team, /Roles you can spawn \(the ones build uses, and quick helpers\):\n- architect: x\n- implementer: x\n- scout \(quick helper\): x$/);
+  assert.match(said.team, /Roles you can spawn \(the ones build uses, and quick helpers\):\n- architect: x\n- implementer: x\n- scout \(quick helper\): x\n\nRoles that start when you message them \(send to: the role\):\n- toolsmith: making the tools/, 'an on-demand role starts whatever the workflow names');
   assert.match(said.wrong, /godot-implementer isn't one of the roles the build workflow uses\. Roles you can spawn: architect, implementer, scout\./);
   assert.match(said.reviewerEarly, /isn't one of the roles/);
   assert.match(said.helper, /^Started scout-1/);

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSyn
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { loadSkills, skillLayers } from './skills.ts';
 import { loadConfig, type Config } from './config.ts';
 import { scopesOf, type ScopeDir } from './configedit.ts';
 import { DesignTracker } from './design.ts';
@@ -41,6 +42,11 @@ export class Project {
     this.config = loadConfig(this.configDirs, { repo: this.dir });
     if (this.settingsOverride) Object.assign(this.config.settings, this.settingsOverride);
     this.design = new DesignTracker(this.home, new Outliner(this.config.languages));
+  }
+
+  /** Reads the skills and tools again, leaving the rest of the config as it was loaded (design §24). */
+  reloadSkills(): void {
+    this.config.skills = loadSkills(skillLayers(this.configDirs, this.dir), this.config.settings.skills);
   }
 
   get scopes(): ScopeDir[] {

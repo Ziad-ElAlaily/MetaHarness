@@ -39,6 +39,8 @@ export interface Rule {
   requires?: string;
   /** Only while this repository file doesn't exist. */
   missing?: string;
+  /** Only while this setting is on, e.g. agentTools (a boolean in settings.json). */
+  setting?: string;
   /** Commit rules: the kinds of change that count. */
   changes: ChangeKind[];
   /** Commit rules: commits that also change this file don't count. */
@@ -73,6 +75,7 @@ export function parseRule(name: string, text: string, file: string): Rule {
     include: meta.include || undefined,
     requires: meta.requires || undefined,
     missing: meta.missing || undefined,
+    setting: meta.setting || undefined,
     changes: changes.length ? changes : CHANGE_KINDS,
     unlessChanged: meta.unless_changed || undefined,
     edited: truthy(meta.edited),

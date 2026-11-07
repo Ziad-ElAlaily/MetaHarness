@@ -187,14 +187,14 @@ All of them accept loose input and answer in plain language.
 | Tool | What it does |
 |---|---|
 | `team()` | The roster: agents on this goal, their roles, what they're doing; plus roles you can spawn and what they're good at |
-| `spawn(role, brief, quick?, name?, worktree?, from?)` | Start a teammate. `brief` is free text. Returns their name. With `quick: true` it starts a helper, waits, and returns the helper's answer directly (§11). With `worktree: true` (or `from`) it gets its own worktree (§9) |
-| `send(to, text, urgent?, decision?)` | `to` = an agent name, a role, `lead`, `all`, or `human`. `all` and a role reach those still going, not teammates who have finished (§7). To the human with `decision: true`, it asks for an approval (§17) |
+| `spawn(role, brief, quick?, name?, worktree?, from?, tools?)` | Start a teammate. `brief` is free text. Returns their name. With `quick: true` it starts a helper, waits, and returns the helper's answer directly (§11). With `worktree: true` (or `from`) it gets its own worktree (§9). `tools` puts tools from the library in its kit (§24) |
+| `send(to, text, urgent?, decision?)` | `to` = an agent name, a role, `lead`, `all`, or `human`. `all` and a role reach those still going, not teammates who have finished (§7). To the human with `decision: true`, it asks for an approval (§17). To an on-demand role nobody has (the toolsmith), it starts one with the message as its task (§24) |
 | `dismiss(name)` | End a finished teammate for good, with the finished teammates it spawned. `name` can be several, or `all` for every finished teammate the caller spawned, leaving out roles woken by events. Only its spawner or the lead can, and only once it has finished and nothing under it still works: the reply says who it refused and why. Its files, commits and notes stay, and it can't be respawned. Not in a room, whose makers stay for the next question |
 | `wait(timeout?, on?, for?)` | Pause until a message arrives or one of your spawned agents finishes, then return what happened. `on` and `for` say who you expect something from and what (`for` alone: something of your own, like a build); a wait that would close a loop is refused (§8) |
 | `status(text)` | A one-line progress update, shown in the UI and in `team()` |
 | `done(note?)` | "I'm finished." The note goes to whoever spawned you. Your session stays resumable for follow-ups. Held while teammates you spawned still work (not quick helpers or woken roles): the reply names them and the agent decides — wait, message them, or carry on |
 | `workflow(name?)` | Read a workflow, e.g. the one the current one says to continue with; without a name, list them (§17) |
-| `skill(name?, part?)` | Read a skill: a summary (what it's for, its sections, its files), or with `part` one section or file; without a name, the skills for your role (§18) |
+| `skill(name?, part?)` | Read a skill or a tool: a summary (what it's for, its sections, its files), or with `part` one section or file; without a name, the skills for your role and the tools in the library (§18, §24) |
 
 Every tool result also says whether you have unread messages and which shared files changed
 since you last looked, so agents notice them naturally.
@@ -1229,6 +1229,7 @@ harness: codex              # optional: harness ids, !id to leave one out
 skill: pdf-forms            # optional: the note points at this skill (the body may be empty)
 sections: ARCHITECTURE.md   # attach the sections of this repo file whose heading is a path
 requires: ARCHITECTURE.md   # only when this file exists in the repo (missing: the opposite)
+setting: agentTools         # only while this boolean setting is on (settings.json)
                             # include: FILE adds a repo file's text after the body, when it exists
 ---
 This repository's map is ARCHITECTURE.md. The part for where you're working is below...
@@ -1266,7 +1267,8 @@ Rules load like roles: the built-in pack (`defaults/rules/` in MetaHarness), the
 replaces the one before it, and `off: true` in its front matter turns it off. Without writing a
 file, `rules: { "<name>": false }` in `settings.json` turns one off (and `true` turns one the
 personal folder turned off back on, for one repository). The **Rules** page lists every rule
-with where it comes from, a switch, and *Customize* to copy a built-in into a folder to edit.
+with where it comes from, a switch on each row (and in its editor), and *Customize* to copy a
+built-in into a folder to edit. A rule with `setting:` says so, and is marked while its setting is off.
 The assistant can propose a rule.
 
 ### The default pack: clean, mapped code
@@ -1347,9 +1349,10 @@ what is on the role, and when to remind is a rule. So a skill's own file only sa
 and what it works with.
 
 - **Where they come from**, least specific first: the built-in folder (`defaults/skills/`,
-  empty for now), the personal `~/.metaharness/skills/`, the repository's `.claude/skills/` and
-  `.agents/skills/` (so skills written for one harness reach all of them), then
-  `.metaharness/skills/`. The same name replaces the one before; `off: true` or
+  empty for now), the personal `~/.metaharness/skills/` (then the tools kept there,
+  `~/.metaharness/tools/`, §24), the repository's `.claude/skills/` and `.agents/skills/` (so
+  skills written for one harness reach all of them), then `.metaharness/skills/`, and the
+  project's tools, `.metaharness/tools/`, last. The same name replaces the one before; `off: true` or
   `settings.json` `skills: {name: false}` turns one off.
 - **Who carries one**: a role's `skills: pdf-forms, frontend`. A skill no role names goes to
   every role; once a role names it, only the roles that do. Imported skills work at once, and
@@ -1769,6 +1772,106 @@ by that name stays where you filed it, overwritten or not.
 do swap updates often), switching a folder of roles and workflows on and off per project, nested
 folders, folders for rules, and rename-on-conflict, which would have to rewrite every reference to
 the renamed item.
+
+---
+
+## 24. Tools agents make
+
+Agents hit limits of their harness: they can't hear a sound they made, see a scene they built, or
+layer ten sound effects by hand without a program to do it. A team should be able to lift those
+limits itself, and keep what it makes for later tasks. So agents make **tools**: small programs
+with a `SKILL.md` on how to use them, kept in the project and reused. An architect in a tiered
+workflow can also have tools made up front, fitted to the teammates it's about to start.
+
+**A tool is a skill in a tools/ folder.** `.metaharness/tools/<name>/` in the project, and
+`~/.metaharness/tools/<name>/` once the human keeps it for every project. The skill loader reads
+both (`src/skills.ts`): the personal tools after the personal skills, the project's tools after
+everything else, so a project's copy of a tool wins while it's being changed. One library, one
+`skill` tool to read it on every harness, one export format. Being in `tools/` is what marks it,
+so the app can tell what agents made from what the human wrote. Its front matter adds where it
+came from and what it needs:
+
+```markdown
+---
+name: sfx-layer
+description: layers sound files into one, each with its own offset, gain, pitch and fade
+made_by: toolsmith-1
+asked_by: sound-1
+why: agents can't hear the result
+goal: 3f2a91c0
+needs: sox, python3       # programs it runs: mh doctor checks them, an import's review lists them
+uses: spectrogram         # tools or skills it calls: an export brings them along
+---
+```
+
+**The toolsmith** (`defaults/roles/toolsmith.md`, Opus with backups) makes and keeps them. Its text
+says how: look in the library first and extend rather than duplicate; arguments, not this task's
+paths; a worked example run before handing over; plain scripts any harness can run; no installing
+machine-wide; for what agents can't take in (sound, video, renderings), also an image, numbers or a
+report they can; an optional `ui/` page with a `settings.json` when a human would tune it. Tools
+lift limits on what agents can do or perceive, never the team's boundaries (the project, pushing,
+approvals, git's guard). It works in the checkout, never a worktree, so a tool is everyone's as
+soon as it's committed, and commits each tool alone (`git add .metaharness/tools/<name>`).
+
+**Started by a message.** A role with `on_demand: true` starts when a teammate sends to it and
+nobody on the team has it (or the one there was let go; a crashed one is the lead's to respawn).
+The hub spawns it in the checkout with the message as its task (who asked, the request, and to
+answer them with send), reporting to the lead, and logs `agent.spawned` with `onDemandBy`. The
+sender hears "toolsmith wasn't on the team, so MetaHarness started toolsmith-1 with your message
+as its task"; the lead gets a note with the request, which never wakes it. From then on there's one
+per goal: messages reach it like any teammate's. On-demand roles start whatever a workflow's
+`roles:` names, and `team()` lists them as roles that start when messaged.
+
+**Asking is a rule.** `defaults/rules/tools.md` (`when: start`, every team role but the toolsmith)
+tells agents the library exists and when to ask: working around something the harness can't do,
+unable to check their own output, or doing the same fiddly thing twice; say what's in the way, what
+goes in and out, and how you'd know it worked; carry on or wait, as suits the work. Changes go
+through the toolsmith too, so everyone using a tool stays in step. All of it is text the human can
+edit or turn off, like the rest of the default pack.
+
+**Who sees which tool.** Every agent may read every tool: `skillFor` lets tools through a role's
+claim, which for a skill would keep it to that role. What's limited is attention. An agent's
+**kit** is the tools its spawner named (`spawn(…, tools: ["sfx-layer"])`) and those its role's
+`skills:` names. Its prompt's *Tools* part spells the kit out with descriptions and names the rest
+of the library (up to 30) without them; `skill()` lists all of them, the kit first. Names in
+`tools:` forgive a typo, and the ones that don't exist come back in the spawn's reply with the
+library. The kit is in `agent.spawned` (`tools`), so a restart keeps it.
+
+**Changes reach their users.** A tool written since the library was read is found: `skill(name)`
+reads the skills again when it doesn't know a name (only skills, through `Project.reloadSkills`;
+roles and the rest still apply to agents started from then on). When a commit touches the tools
+folder (`toolsCommitted`, in the git poll), the library is read again and `tool.changed` {tool,
+sha, summary, new?, removed?} is logged. Agents whose kit holds the tool, or who have read it
+(`skill.read` carries `tool: true`), get "[MetaHarness] The tool sfx-layer was changed by
+toolsmith-1 (commit …). Read it again with skill("sfx-layer") before you next use it."; the lead
+hears of a new tool, with its description, to hand it to whoever needs it. These are notes: they
+join a running turn or wait for the next thing that reaches the agent.
+
+**Kept by the human.** Tools are committed with the project. *Tools & skills* lists them under
+*Made by agents*, apart from skills, with who made them, for whom and why, what they need (and
+what of it isn't installed), what they use, and how many agents have read them and when (from
+`skill.read` across goals). **Move to my library** (`tool.elevate`, client API only) copies the
+folder into `~/.metaharness/tools/`, replacing a personal one of that name, and removes the
+project's copy; when the repository tracks it, the removal is committed on its own (`git commit
+-- <path>`, so nothing else in the checkout comes along). Agents never write the personal library,
+which is outside the project: a toolsmith that improves a kept tool does it in a project copy,
+which wins in that project, and the page says it differs from the library's, with **Update your
+library with this version**.
+
+**A switch for all of it.** `agentTools: false` in settings.json (*Tools agents make* on the
+Settings page) is there for when it goes wrong. Agents don't see the library (`skillsFor` leaves
+tools out, so no *Tools* part, and `skill` says tools are off), `spawn`'s `tools` is ignored with a
+word in its reply, the role settings names as `toolsmith` can't be spawned or started by a message
+(the sender is told tools are off), tool commits send no notes, and the `tools` rule goes quiet
+through its `setting: agentTools`. A toolsmith already at work carries on until the human pauses or
+dismisses it. The tools themselves stay, listed on *Tools & skills* with a note that they're off.
+
+**Passing them on.** An export packs a tool as a skill marked `tool: true`, with the tools its
+`uses:` names, and an import puts it back in a `tools/` folder. The review says it's a tool agents
+made and which programs it expects on the machine, besides the programs it comes with.
+
+**Left for later.** The toolsmith's `ui/` pages shown in the app; tools as MCP servers the toolsmith
+writes, for long-running processes or structured results; usage counted from runs, not reads.
 
 ## Appendix A. Harness capabilities (checked 2026-10-17, Antigravity 2026-10-18)
 

@@ -60,6 +60,8 @@ interface Entry extends Ref {
   def?: McpServerDef;
   /** The folder a role or workflow is organized under. */
   folder?: string;
+  /** A skill that's a tool agents made: it lives in tools/ (design §24). */
+  tool?: boolean;
 }
 
 /** Every item this setup has, the most specific folder's where a name is in several. */
@@ -69,7 +71,7 @@ function catalog(view: ConfigView): Map<string, Entry> {
   for (const r of view.roles) add({ kind: 'role', name: r.name, scope: r.scope, file: r.file, ...(r.folder ? { folder: r.folder } : {}) });
   for (const w of view.workflows) add({ kind: 'workflow', name: w.name, scope: w.scope, file: w.file, ...(w.folder ? { folder: w.folder } : {}) });
   for (const r of view.rules) add({ kind: 'rule', name: r.name, scope: r.scope, file: r.file });
-  for (const s of view.skills) add({ kind: 'skill', name: s.name, scope: s.source, dir: s.dir });
+  for (const s of view.skills) add({ kind: 'skill', name: s.name, scope: s.source, dir: s.dir, file: s.file, ...(s.tool ? { tool: true } : {}) });
   for (const m of view.mcp) add({ kind: 'mcp', name: m.name, scope: m.scope, def: m.def });
   return out;
 }
@@ -90,6 +92,8 @@ function refsOf(kind: ItemKind, text: string, isWorkflow: (n: string) => boolean
       ...list(meta.mcp).map(name => ({ kind: 'mcp' as const, name })),
     ];
   }
+  // A tool brings the tools and skills it calls.
+  if (kind === 'skill') return list(meta.uses).map(name => ({ kind: 'skill' as const, name }));
   return kind === 'rule' && meta.skill ? [{ kind: 'skill', name: meta.skill }] : [];
 }
 
@@ -177,6 +181,8 @@ export interface PackedItem extends Ref {
   /** A skill: its folder's name. A role or workflow: the folder it's organized under, if any. */
   folder?: string;
   files?: PackedFile[];
+  /** A skill that's a tool agents made: it lands in tools/, not skills/. */
+  tool?: boolean;
   /** An MCP server, with secret values taken out. */
   def?: McpServerDef;
   /** Its values people must fill in: env.NAME, headers.NAME. */
@@ -263,7 +269,7 @@ function packItem(e: Entry, warnings: ExportWarning[]): PackedItem {
     if (more) throw new Error(`The skill ${e.name} has more than ${MAX_FILES} files: too many to export.`);
     const packed = ['SKILL.md', ...files.map(f => f.path)].map(p => packFile(e.dir!, p));
     for (const f of packed) if (f.text !== undefined) scan(`${key}: ${f.path}`, f.text, warnings);
-    return { kind: e.kind, name: e.name, folder: checkName(basename(e.dir!), 'skill folder'), files: packed };
+    return { kind: e.kind, name: e.name, folder: checkName(basename(e.dir!), 'skill folder'), files: packed, ...(e.tool ? { tool: true } : {}) };
   }
   const text = textOf(e);
   scan(key, text, warnings);
@@ -333,8 +339,9 @@ export function parseExport(text: unknown): ExportFile {
     seen.add(key);
     if (kind === 'skill') {
       const folder = checkName(i.folder, 'skill folder');
-      if (folders.has(folder)) throw new Error(`That file holds two skills in the folder ${folder}.`);
-      folders.add(folder);
+      const tool = i.tool === true;
+      if (folders.has(`${tool}/${folder}`)) throw new Error(`That file holds two ${tool ? 'tools' : 'skills'} in the folder ${folder}.`);
+      folders.add(`${tool}/${folder}`);
       if (!Array.isArray(i.files) || !i.files.length) throw new Error(`The skill ${name} in that file has no files.`);
       const paths = new Set<string>();
       const files = i.files.map(f => {
@@ -346,7 +353,7 @@ export function parseExport(text: unknown): ExportFile {
         throw new Error(`${path} in the skill ${name} has no contents.`);
       });
       if (!paths.has('SKILL.md')) throw new Error(`The skill ${name} in that file has no SKILL.md.`);
-      return { kind, name, folder, files };
+      return { kind, name, folder, files, ...(tool ? { tool: true } : {}) };
     }
     if (kind === 'mcp') {
       const d = i.def as McpServerDef | undefined;
@@ -370,8 +377,10 @@ const sha = (b: string | Buffer) => createHash('sha256').update(b).digest('hex')
 const SUB: Record<'role' | 'workflow' | 'rule', string> = { role: 'roles', workflow: 'workflows', rule: 'rules' };
 
 /** Where an item by this name is in a config folder, relative to it; undefined when there's none. */
+const skillHome = (i: PackedItem) => `${i.tool ? 'tools' : 'skills'}/${i.folder}`;
+
 function existing(dir: string, i: PackedItem): string | undefined {
-  if (i.kind === 'skill') return existsSync(join(dir, 'skills', i.folder!)) ? `skills/${i.folder}` : undefined;
+  if (i.kind === 'skill') return existsSync(join(dir, skillHome(i))) ? skillHome(i) : undefined;
   if (i.kind === 'rule') return existsSync(join(dir, 'rules', `${i.name}.md`)) ? `rules/${i.name}.md` : undefined;
   if (i.kind === 'mcp') return undefined;
   return docPath(join(dir, SUB[i.kind]), i.name)?.slice(dir.length + 1);
@@ -383,7 +392,7 @@ function existing(dir: string, i: PackedItem): string | undefined {
  * export, so they stay together.
  */
 function landing(file: ExportFile, i: PackedItem): string {
-  if (i.kind === 'skill') return `skills/${i.folder}`;
+  if (i.kind === 'skill') return skillHome(i);
   if (i.kind === 'rule') return `rules/${i.name}.md`;
   if (i.kind === 'mcp') return 'mcp.json';
   const folder = i.folder ?? (file.items.filter(x => x.kind === i.kind).length > 1 ? file.name : '');
@@ -470,6 +479,9 @@ export interface ReviewContext {
   jobs: Record<string, string>;
 }
 
+/** A packed skill's SKILL.md. */
+const skillText = (i: PackedItem) => i.files?.find(f => f.path === 'SKILL.md')?.text;
+
 const SCRIPT = /\.(sh|bash|zsh|py|js|mjs|cjs|ts|rb|pl|ps1|bat|cmd|exe)$/i;
 
 function powersOf(i: PackedItem): string[] {
@@ -485,7 +497,10 @@ function powersOf(i: PackedItem): string[] {
     if (i.def?.command) out.push(`Runs on this machine: ${[i.def.command, ...(i.def.args ?? [])].join(' ')}`);
   } else if (i.kind === 'skill') {
     const scripts = (i.files ?? []).filter(f => f.exec || SCRIPT.test(f.path) || f.base64 !== undefined).map(f => f.path);
+    if (i.tool) out.push('A tool agents made, not a guide someone wrote');
     if (scripts.length) out.push(`Comes with programs agents could run: ${scripts.slice(0, 8).join(', ')}${scripts.length > 8 ? ` and ${scripts.length - 8} more` : ''}`);
+    const needs = list(parseFrontMatter(skillText(i) ?? '').meta.needs);
+    if (needs.length) out.push(`Runs programs it expects on this machine: ${needs.join(', ')}`);
   } else if (i.kind === 'rule') {
     const { meta, body } = parseFrontMatter(i.text ?? '');
     if (/^(true|yes|1|on)$/i.test(meta.off ?? '') && !body) out.push(`Turns off the rule ${i.name}`);
@@ -563,8 +578,9 @@ export function reviewImport(file: ExportFile, scopes: ScopeDir[], scope: unknow
   const inFolder = (f: string) => file.items.some(x => x.kind === 'role' && x.folder === f) || [...cat.values()].some(x => x.kind === 'role' && x.folder === f);
   const unmet = new Map<string, Ref & { by: string }>();
   for (const i of file.items) {
-    if (!i.text) continue;
-    for (const r of refsOf(i.kind, i.text, isWorkflow)) {
+    const text = i.kind === 'skill' ? skillText(i) : i.text;
+    if (!text) continue;
+    for (const r of refsOf(i.kind, text, isWorkflow)) {
       if (r.kind === 'role' && r.name.endsWith('/') ? inFolder(r.name.slice(0, -1)) : inFile.has(keyOf(r)) || cat.has(keyOf(r))) continue;
       unmet.set(keyOf(r), { ...r, by: keyOf(i) });
     }

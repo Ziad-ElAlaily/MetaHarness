@@ -186,6 +186,8 @@ export interface RoleDef {
   allow: string[];
   /** Keeps the harness's own skills instead of hiding them. */
   nativeSkills: boolean;
+  /** Started when a teammate messages the role and nobody on the team has it. */
+  onDemand?: boolean;
 }
 
 export interface WorkflowDef {
@@ -224,6 +226,8 @@ export interface RuleDef {
   include?: string;
   requires?: string;
   missing?: string;
+  /** Only while this setting is on, e.g. agentTools. */
+  setting?: string;
   changes: ChangeKind[];
   unlessChanged?: string;
   edited: boolean;
@@ -254,6 +258,21 @@ export interface SkillDef {
   carriedBy: string[];
   /** Rules that point at it. */
   pointedBy: string[];
+  /** A tool agents made (design §24): in a tools/ folder; every agent may read it. */
+  tool: boolean;
+  madeBy?: string;
+  askedBy?: string;
+  why?: string;
+  goal?: string;
+  /** Programs it runs, and those of them not installed on the daemon's machine. */
+  needs: string[];
+  missing: string[];
+  /** Tools or skills it calls. */
+  uses: string[];
+  /** A project's tool that replaces a personal one: whether they're the same. */
+  personalSame?: boolean;
+  /** Agents that have read it, across goals, and when one last did. */
+  usage?: { agents: number; last: string };
 }
 
 export interface GuideDef {
@@ -569,6 +588,8 @@ export interface Settings {
   limitCheckMinutes: number;
   contextHandoffPct: number;
   stallMinutes: number;
+  /** Agents make and use tools (design §24). */
+  agentTools: boolean;
   models: Record<string, ModelSettings>;
   rules: Record<string, boolean>;
 }

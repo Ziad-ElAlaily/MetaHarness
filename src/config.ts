@@ -177,6 +177,7 @@ export function parseRole(file: string): Role {
     workflow: meta.workflow || undefined,
     worktree: /^(true|yes|1)$/i.test(meta.worktree ?? ''),
     nativeSkills: /^(true|yes|1)$/i.test(meta.native_skills ?? ''),
+    ...(/^(true|yes|1)$/i.test(meta.on_demand ?? '') ? { onDemand: true } : {}),
     ...(APPROVAL_MODES.includes(meta.approvals as ApprovalMode) ? { approvals: meta.approvals as ApprovalMode } : {}),
     ...(list(meta.wake).length ? { wake: list(meta.wake) } : {}),
     file,
