@@ -286,6 +286,7 @@ interface HeaderProps {
 
 /** The room's header: which room, and where it goes from here: a design, a goal, another room, or just ending, clearer. */
 export function RoomHeader({ rooms, goal, room, events, snapshot, connected, onGoal, onNewRoom, onRoomFromThis, onStartGoal, onDesign, onAllRooms, onCommand }: HeaderProps) {
+  const makerCount = room.lenses.filter(l => !l.prototype).length;
   const confirm = useConfirm();
   const live = goal.live && goal.status !== 'ended';
   const agents = goal.agents;
@@ -303,7 +304,7 @@ export function RoomHeader({ rooms, goal, room, events, snapshot, connected, onG
         <span>{took}</span>
         {goal.cost != null && <span title="Cost reported by the harnesses: the lead and its makers">{money(goal.cost)}</span>}
         <span>
-          {room.lenses.length} maker{room.lenses.length === 1 ? '' : 's'} · {room.cards.length} card{room.cards.length === 1 ? '' : 's'}
+          {makerCount} maker{makerCount === 1 ? '' : 's'} · {room.cards.length} card{room.cards.length === 1 ? '' : 's'}
         </span>
         {live && snapshot && <AccountChips accounts={snapshot.accounts.filter(a => agents.some(x => x.harness === harnessOf(a.id)))} />}
         {!connected && goal.live && <span className="warn-text">reconnecting…</span>}

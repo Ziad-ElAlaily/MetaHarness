@@ -53,6 +53,8 @@ export interface Role {
   nativeSkills?: boolean;
   /** How this role's approvals are decided, instead of the settings' default. */
   approvals?: import('./settings.ts').ApprovalMode;
+  /** Started by MetaHarness when a teammate messages the role and nobody on the team has it (the toolsmith), instead of by a lead. */
+  onDemand?: boolean;
   /** What wakes agents in this role besides messages: `landed`, work reaching the goal branch (the cartographer). */
   wake?: string[];
   /** The folder it's organized under: roles/<folder>/<name>.md. */

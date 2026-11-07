@@ -36,6 +36,12 @@ Milestone 1 in progress:
   `.agents/skills`) reach every harness through one `skill` tool: a summary first, then the
   section or file an agent needs. Roles carry them like MCP servers, and a rule can point at
   one at the moment it fits. Personal skills are hidden so every harness is on equal terms.
+- **Tools agents make:** when something is in an agent's way (a sound it can't hear, a scene it
+  can't see, a fiddly job done twice), it asks the **toolsmith**, which MetaHarness starts on
+  that first message. Tools are skills in `.metaharness/tools/`, committed with the project;
+  every agent can read them, and a lead names the ones each teammate gets (`spawn … tools:`).
+  Their users hear when one changes. *Tools & skills* lists them apart, with who made them and
+  why, and moves one to your personal library for every project.
 - The team works **in your checkout**, like native subagents; worktrees (on `mh/<goal>/<agent>`)
   are only for code written in parallel, when a workflow asks for them. They get hard-linked
   copies of your ignored `node_modules`/`vendor`, merge conflicts show up in `mh tail`, and
@@ -129,7 +135,8 @@ Another harness on a transport MetaHarness already speaks is a profile, not code
 | `src/git.ts` | Worktrees and branches per agent, reading new commits for git events, and diffs |
 | `src/design.ts`, `src/languages.ts` | The Design view's snapshots (areas, imports, what changed) and the language packs that read code |
 | `src/rules.ts` | Rules: loading the layers, and which ones fire for a tool call, a commit or a done |
-| `defaults/` | The built-in rules, the `map-bootstrap` and `doc-bootstrap` workflows, the cartographer role, and language packs (grammars in `defaults/languages/`) |
+| `src/tools.ts` | Tools agents make: which ones a commit changed, and moving one to the personal library |
+| `defaults/` | The built-in rules, the `map-bootstrap` and `doc-bootstrap` workflows, the cartographer and toolsmith roles among others, and language packs (grammars in `defaults/languages/`) |
 | `src/mcp.ts` | The tools as an MCP server, one identity per agent, plus the approval tool |
 | `src/cli.ts` | The `mh` command |
 | `src/adapters/` | `claude.ts` (Claude Code, stream-json), `codex.ts` (Codex app-server), `agy.ts` + `agy-hook.ts` (Antigravity CLI, stream-json and hooks), `fake.ts` (scripted agents for tests) |

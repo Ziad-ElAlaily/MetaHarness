@@ -1,7 +1,7 @@
-import { appendFileSync, copyFileSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { appendFileSync, copyFileSync, cpSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, watch, writeFileSync } from 'node:fs';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { basename, dirname, extname, isAbsolute, join, normalize, relative, sep } from 'node:path';
-import { homedir, tmpdir } from 'node:os';
+import { homedir, hostname, tmpdir } from 'node:os';
 import type { Readable } from 'node:stream';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { EventStore } from './store.ts';
@@ -20,7 +20,11 @@ import type { ApprovalMode } from './settings.ts';
 import { MCP_SERVER_NAME } from './mcp.ts';
 import { pathsOutside, readOnlyCommand } from './readonly.ts';
 import { goalOver, INTERRUPTED, replayGoal, type AgentReplay, type GoalReplay } from './recover.ts';
-import { HISTORY, saveUpload, SharedFolder } from './shared.ts';
+import { GODOT_CACHE, HISTORY, saveUpload, SharedFolder } from './shared.ts';
+import {
+  checkouts, cloneVersion, commitAll, copyGodotCache, freezeFolder, headOf, installTools, keptAt, latest, listPrototypes, loadPrototype, logProcess, mergePreview, mergeVersion, movedOn, notesAt, processFile, prototypeFile, prototypeId, prototypeRefs, prototypeRepo,
+  prototypesRoot, restoreVersion, savePrototype, sceneOf, smallProject, tagVersion, takeKept, TOOLS_DIR, versionOf, writeChanges, writeTuning, type Prototype, type PrototypeStart, type PrototypeVersion,
+} from './prototypes.ts';
 import { cleanGoal, describeClean, type CleanResult } from './clean.ts';
 import { authorsDir, deniedCommandPrefixes, guardEnv, installGuard, readAuthors, refusedGitCommand, removeAuthors } from './guard.ts';
 import { MAP_FILE, compareDesigns, designReport, type DesignReport, type SnapshotInfo } from './design.ts';
@@ -31,10 +35,11 @@ import { loadProfiles } from './harnesses.ts';
 import { commandsOnly, endTagged, settle, tagged, type Tagged } from './procs.ts';
 import { foldEfforts, splitEffort, type EffortVariant } from './effort.ts';
 import { browse, folderSetup, forget, loadRegistry, nesting, Project, projectId, realDir, remember, within } from './projects.ts';
-import { matchesPaths, onAway, onCommit, onDone, onToolCall, rulesPrompt, RuleState, toolPaths, type Rule, type RuleAgent, type RuleNote, type ToolInfo } from './rules.ts';
-import { claimedSkills, skillsFor, skillsPrompt, withSkills, type Skill } from './skills.ts';
+import { BUILTIN_DIR, matchesPaths, onAway, onCommit, onDone, onToolCall, rulesPrompt, RuleState, toolPaths, type Rule, type RuleAgent, type RuleNote, type ToolInfo } from './rules.ts';
+import { claimedSkills, skillsFor, skillsPrompt, toolKit, withSkills, type Skill } from './skills.ts';
+import { elevateTool, sameTool, toolsPrefix, toolsTouched } from './tools.ts';
 import {
-  applyCanvas, branchCards, canvasMarkdown, castText, DEFAULT_MAKERS, demoPage, leadMethodology, lensLines, lensMethodology, lensName, makesOf, mixAsk, modelRole, parseCanvasOps, RESPONSIBILITIES,
+  applyCanvas, branchCards, canvasMarkdown, castText, DEFAULT_MAKERS, demoPage, godotErrors, isGodotDemo, leadMethodology, lensLines, lensMethodology, lensName, makesOf, mixAsk, modelRole, parseCanvasOps, prototypeMethodology, RESPONSIBILITIES,
   responsibilityOf, seedCanvas, sharedPath,
   type Canvas, type CanvasOp, type CanvasResult, type Card, type CardKind, type CardLink, type Ingredient, type Lens, type MakerCan, type Output, type RoomPaths, type RoomState,
 } from './rooms.ts';
@@ -75,6 +80,8 @@ export interface AgentRec {
   parent: string;
   brief: string;
   /** A maker in a brainstorm room: what it's for, and how it should look at the question. */
+  /** The prototype it builds, in its own folder (design §21). */
+  prototype?: string;
   responsibility?: string;
   stance?: string;
   /** A maker in a room: who asked its current turn, the lead or the human (its answer goes back to them). */
@@ -178,6 +185,10 @@ export interface AgentRec {
   rules: RuleState;
   /** Rule notes for an agent between turns: they ride along with whatever reaches it next. */
   ruleNotes: string[];
+  /** Tools its spawner gave it (design §24): its prompt spells them out, besides its role's. */
+  tools: string[];
+  /** Tools it has read, so it hears when one changes. */
+  toolsUsed: Set<string>;
 }
 
 export interface GoalRec {
@@ -185,6 +196,8 @@ export interface GoalRec {
   /** A brainstorm room (design §21): the human talks with its lead, which keeps a canvas and sends lenses. The request is its topic. */
   kind?: 'room';
   room?: RoomState;
+  /** The prototype this goal builds for production: its agents may read its folder. */
+  prototypeFrom?: { id: string; version: number; dir: string };
   request: string;
   /** The project it belongs to (design §22): its folder, config and design snapshots. */
   project: Project;
@@ -408,6 +421,23 @@ const GIT_COMMITS = /\bgit\b[^|;&\n]*?\s(?:commit|merge|cherry-pick|revert|pull|
 const GIT_ACTOR_MS = 120_000;
 
 /** What GET /media serves from a room's folder: images, and demo pages. */
+/** A Godot demo running because the human pressed its button. */
+interface GodotRun {
+  goal: string;
+  /** Its project.godot, relative to the room's shared folder. */
+  file: string;
+  /** Importing, then the game; cleared when it's over. */
+  proc?: ChildProcess;
+  stopped?: boolean;
+  errors: string[];
+}
+
+/** How many of a run's errors are kept: a broken game can print one every frame. */
+const GODOT_MAX_ERRORS = 20;
+
+/** Set when Godot has imported a project, to tell whether anything changed since. */
+const GODOT_IMPORTED = 'mh-imported';
+
 /** Files the human attached to messages, in a shared folder. */
 const UPLOADS = /^(room\/)?uploads\//;
 
@@ -426,6 +456,19 @@ const MEDIA_TYPES: Record<string, string> = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
   '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8',
 };
+
+/** True unless Godot imported this project after its files last changed. */
+function godotNeedsImport(project: string, marker: string): boolean {
+  if (!existsSync(marker)) return true;
+  const since = statSync(marker).mtimeMs;
+  const changed = (dir: string): boolean =>
+    readdirSync(dir, { withFileTypes: true }).some(e => {
+      if (e.name === GODOT_CACHE || e.name === '.git' || e.name === TOOLS_DIR) return false;
+      const full = join(dir, e.name);
+      return e.isDirectory() ? changed(full) : e.isFile() && statSync(full).mtimeMs > since;
+    });
+  return changed(project);
+}
 
 /** The versions of a shared file kept in its history, oldest first. */
 function keptVersions(dir: string, rel: string): { version: number; by: string; file: string }[] {
@@ -541,6 +584,10 @@ export class Daemon {
   }
 
   private settingsOverride?: DaemonOptions['settings'];
+  /** Godot demos the human has running, by room and file. */
+  private godotRuns = new Map<string, GodotRun>();
+  /** The latest piece of disk and git work per prototype: they run one after another. */
+  private prototypeJobs = new Map<string, Promise<void>>();
   /** Set by close(): side work still finishing does nothing more. */
   private closing = false;
 
@@ -721,7 +768,7 @@ export class Daemon {
    * lead follows (none: it picks one). `leadDef` runs the lead from a role that isn't in the
    * config, and `dir` works in a folder that isn't a project you opened (both for harness tests).
    */
-  startGoal(o: { request: string; project?: string; lead?: string; workflow?: string; playbook?: string; leadDef?: Role; dir?: string; fromRoom?: string; from?: { goal: string; files?: string[] }; attach?: StartFiles }): string {
+  startGoal(o: { request: string; project?: string; lead?: string; workflow?: string; playbook?: string; leadDef?: Role; dir?: string; fromRoom?: string; from?: { goal: string; files?: string[] }; attach?: StartFiles; prototype?: Awaited<ReturnType<Daemon['prototypeHandoff']>> }): string {
     const project = this.workPlace(o);
     this.checkDraft(o.attach);
     const workflow = o.workflow ?? o.playbook;
@@ -745,6 +792,12 @@ export class Daemon {
     };
     // What it continues from is copied in, so it outlasts that goal being deleted.
     const imported = source ? this.importShared(String(source.data.sharedDir), sharedDir, from!.files ?? (source.data.kind === 'room' ? ['room'] : [])) : [];
+    if (o.prototype) {
+      g.prototypeFrom = { id: o.prototype.id, version: o.prototype.version, dir: o.prototype.dir };
+      const to = join(sharedDir, 'imported', 'prototype', o.prototype.id);
+      mkdirSync(dirname(to), { recursive: true });
+      renameSync(o.prototype.stage, to);
+    }
     const attachments = this.adoptDraft(g, o.attach);
     const gs = git.setupGoal(g.dir, id);
     if ('reason' in gs) g.gitNote = gs.reason;
@@ -762,11 +815,12 @@ export class Daemon {
         branch: g.git?.branch ?? null, base: g.git?.base ?? null, notice: this.goalNotice(g) ?? null,
         ...(o.fromRoom ? { fromRoom: o.fromRoom } : {}),
         ...(from ? { from: { goal: from.goal, files: imported } } : {}),
+        ...(g.prototypeFrom ? { prototype: g.prototypeFrom } : {}),
         ...(attachments.length ? { attachments } : {}),
       },
     });
     for (const c of g.shared.scan()) this.sharedChanged(g, c);
-    const background = !source ? '' : source.data.kind === 'room' ? this.roomBackground(from!.goal, sharedDir) : this.goalBackground(from!.goal, imported);
+    const background = o.prototype ? o.prototype.background(sharedDir) : !source ? '' : source.data.kind === 'room' ? this.roomBackground(from!.goal, sharedDir) : this.goalBackground(from!.goal, imported);
     // The request stays as you wrote it, for titles and teammates: what's attached is in the lead's brief.
     const brief = [o.request, attachments.join('\n'), background].filter(Boolean).join('\n\n');
     const r = this.spawnAgent(id, { role: leadRole, roleDef: o.leadDef, brief, parent: 'human', isLead: true, workflow });
@@ -855,6 +909,12 @@ export class Daemon {
       worktree?: boolean; from?: string;
       /** A room's maker: its responsibility and stance, and who asked its first turn. */
       responsibility?: string; stance?: string; askedBy?: string;
+      /** A prototype's builder: it works in the prototype's folder. */
+      prototype?: { id: string; cwd: string };
+      /** Tools for its kit, by name (design §24). */
+      tools?: string[];
+      /** An on-demand role started because this teammate messaged it. */
+      onDemandBy?: string;
     },
   ): SpawnResult {
     const g = this.goals.get(goalId);
@@ -868,6 +928,10 @@ export class Daemon {
     if (!o.roleDef && scope.workflows.length && this.teamRoles(g.project.config).some(r => r.name === o.role && !roleNames.includes(r.name))) {
       const which = scope.workflows.length > 1 ? `the ${scope.workflows.join(' and ')} workflows use` : `the ${scope.workflows[0]} workflow uses`;
       return { ok: false, error: `${o.role} isn't one of the roles ${which}. Roles you can spawn: ${roleNames.join(', ')}.` };
+    }
+    const { toolsmith, agentTools } = g.project.config.settings;
+    if (!agentTools && (o.roleDef?.name ?? o.role).trim().toLowerCase() === toolsmith.toLowerCase()) {
+      return { ok: false, error: `${toolsmith} can't be started: making and using tools is turned off in the settings (agentTools). Do the work without a tool.` };
     }
     if (!res.match) {
       const hint = res.suggestions.length ? ` Did you mean ${res.suggestions[0]}?` : '';
@@ -913,13 +977,31 @@ export class Daemon {
       deps = worktree.deps = git.copyDependencies(g.git, worktree.path);
     }
 
+    if (o.prototype) cwd = o.prototype.cwd;
+
+    // Tools in its kit: those the library has, by name, with a typo forgiven; the rest are named back.
+    const library = [...g.project.config.skills.values()].filter(s => s.tool && !s.off).map(s => s.name);
+    const tools: string[] = [];
+    const unknownTools: string[] = [];
+    const toolsOff = !g.project.config.settings.agentTools;
+    for (const t of toolsOff ? [] : o.tools ?? []) {
+      const m = resolveName(t, library).match;
+      if (m) tools.includes(m) || tools.push(m);
+      else unknownTools.push(t);
+    }
+    if (toolsOff && o.tools?.length) note = [note, `Tools are turned off in the settings, so ${name} has none.`].filter(Boolean).join(' ');
+    if (unknownTools.length) {
+      const have = library.length ? `The tools are: ${library.join(', ')}.` : 'There are no tools yet: ask the toolsmith (send to: toolsmith) for one.';
+      note = [note, `There's no tool called ${unknownTools.join(', ')}, so ${name} doesn't have ${unknownTools.length > 1 ? 'them' : 'it'}. ${have}`].filter(Boolean).join(' ');
+    }
+
     const token = randomBytes(16).toString('hex');
     this.tokens.set(token, { goal: goalId, agent: name });
     const rec: AgentRec = {
-      goal: goalId, name, role, harness, model, ...(effort ? { effort } : {}), parent: o.parent, brief: o.brief, ...(o.responsibility ? { responsibility: o.responsibility } : {}), ...(o.stance ? { stance: o.stance } : {}), ...(o.askedBy ? { askedBy: o.askedBy } : {}),
+      goal: goalId, name, role, harness, model, ...(effort ? { effort } : {}), parent: o.parent, brief: o.brief, ...(o.prototype ? { prototype: o.prototype.id } : {}), ...(o.responsibility ? { responsibility: o.responsibility } : {}), ...(o.stance ? { stance: o.stance } : {}), ...(o.askedBy ? { askedBy: o.askedBy } : {}),
       quick: !!o.quick, isLead: !!o.isLead, cwd, worktree, state: 'starting', status: '', lastText: '',
       adapter, gen: 0, token, systemPrompt: '', inbox: [], waiters: [], doneWaiters: [], pendingApprovals: 0, fileNotes: new Map(),
-      toolsRunning: 0, lastToolEnd: 0, progressAt: Date.now(), rules: new RuleState(), ruleNotes: [],
+      toolsRunning: 0, lastToolEnd: 0, progressAt: Date.now(), rules: new RuleState(), ruleNotes: [], tools, toolsUsed: new Set(),
       ...(parentRec ? { lastPartner: { name: parentRec.name, at: Date.now(), text: o.brief, sent: false } } : {}),
       ...(picked.home && !o.quick ? { home: picked.home } : {}),
     };
@@ -932,6 +1014,7 @@ export class Daemon {
         role: role.name, harness, model, ...(effort ? { effort } : {}), ...(rec.home ? { home: rec.home } : {}), brief: o.brief, quick: !!o.quick, cwd, ...(o.responsibility ? { responsibility: o.responsibility } : {}), ...(o.stance ? { stance: o.stance } : {}),
         worktree: worktree?.path ?? null, branch: worktree?.branch ?? null, base: worktree?.base ?? null,
         ...(startedFrom ? { startedFrom } : {}), ...(deps.length ? { deps } : {}), ...(note ? { note } : {}),
+        ...(tools.length ? { tools } : {}), ...(o.onDemandBy ? { onDemandBy: o.onDemandBy } : {}),
       },
     });
 
@@ -965,13 +1048,13 @@ export class Daemon {
           hookUrl: this.mcpBase ? `${this.mcpBase}/hook/${rec.token}` : '', agentDir: this.agentDir(rec),
           mcpServers: rec.role.mcp.map(name => ({ name, def: g.project.config.mcp.get(name) })),
           // Committing writes to the shared .git (and a worktree's own git directory).
-          gitDirs: !g.git || rec.quick ? [] : rec.worktree ? [g.git.commonDir, rec.worktree.gitDir] : [g.git.commonDir],
+          gitDirs: !g.git || rec.quick || rec.prototype ? [] : rec.worktree ? [g.git.commonDir, rec.worktree.gitDir] : [g.git.commonDir],
           // Other projects and MetaHarness's home are off limits; this project, the goal's folder and the git guard aren't.
-          readRoots: [g.dir, join(this.home, 'goals', g.id), this.guardDir],
+          readRoots: [g.dir, join(this.home, 'goals', g.id), this.guardDir, ...this.prototypeRoots(g, rec)],
           denyRead: [...this.otherProjects(g), this.home],
           // MH_GOAL and MH_AGENT also mark what its commands start, so it can be found once they're done (endStraysLater).
           // MH_PROJECT_LOCK is the project's own lock for runs that mustn't overlap (test suites), shared by its goals only.
-          env: { MH_GOAL: rec.goal, MH_AGENT: rec.name, MH_PROJECT_LOCK: projectLock(g.project), ...(g.git ? guardEnv(this.guardDir, rec.worktree?.branch, g.git.repo, { goal: rec.goal, agent: rec.name }) : {}) },
+          env: { MH_GOAL: rec.goal, MH_AGENT: rec.name, MH_PROJECT_LOCK: projectLock(g.project), ...(g.git && !rec.prototype ? guardEnv(this.guardDir, rec.worktree?.branch, g.git.repo, { goal: rec.goal, agent: rec.name }) : {}) },
           sharedCheckout: this.sharedCheckout(rec),
           deniedCommands: deniedCommandPrefixes(this.sharedCheckout(rec)),
           approvals: this.approvalMode(rec),
@@ -1053,7 +1136,8 @@ export class Daemon {
     const paths = inRoom ? this.roomPaths(g) : undefined;
     const parts = [
       !inRoom ? (rec.role.helper ? g.project.config.helperMethodology : g.project.config.methodology)
-      : rec.isLead ? leadMethodology({ topic: g.request, paths: paths!, lenses: this.lensRoster(g) })
+      : rec.isLead ? leadMethodology({ topic: g.request, paths: paths!, lenses: this.lensRoster(g), prototypes: this.prototypeRoster(g) })
+      : rec.prototype ? this.builderMethodology(g, rec, paths!)
       : lensMethodology({ topic: g.request, lead: g.lead || 'lead', paths: paths!, makes: this.makesOfAgent(g, rec) }),
     ];
     // A maker that's just a model has no role of its own: its responsibility says what it's for.
@@ -1070,9 +1154,9 @@ export class Daemon {
       const list = [...g.project.config.workflows.values()].map(w => `- ${w.name}: ${w.goodAt || '—'}`).join('\n');
       parts.push(`## Workflows\n\nGuides for running kinds of tasks. If one fits this goal, read it with the \`workflow\` tool and follow it.\n\n${list}`);
     }
-    const rules = rulesPrompt(this.agentRules(rec), ruleAgent(rec), rec.cwd, this.away && !g.room);
+    const rules = rulesPrompt(this.agentRules(rec), ruleAgent(rec), rec.cwd, this.away && !g.room, !!g.prototypeFrom);
     if (rules) parts.push(rules);
-    const skills = skillsPrompt(this.skillsFor(rec));
+    const skills = skillsPrompt(this.skillsFor(rec), this.kitFor(rec));
     if (skills) parts.push(skills);
     parts.push(
       [
@@ -1092,6 +1176,7 @@ export class Daemon {
 
   private gitLines(g: GoalRec, rec: AgentRec, startedFrom: string): string[] {
     if (rec.quick) return [`- This is ${rec.parent}'s working folder. Read it, but don't change it.`];
+    if (rec.prototype) return ["- Git: this folder is the prototype's own repository, nothing to do with the project's. MetaHarness commits it when your turn ends."];
     if (!g.git) return [`- Git: none here (${g.gitNote}). Everyone works in this folder, so agree on who edits which files.`];
     const branch = g.git.branch === 'HEAD' ? 'a detached HEAD' : `branch ${g.git.branch}`;
     const lead = rec.isLead ? 'you' : g.lead || 'the lead';
@@ -1135,11 +1220,11 @@ export class Daemon {
         brief,
         '',
         '---',
-        `[MetaHarness] You are ${rec.name}${rec.role.file === '(room lens)' ? '' : `, the ${rec.role.name}`}, a maker in a brainstorm room: ${rec.askedBy === 'human' ? 'the human' : rec.parent} sent you the ask above.`,
+        `[MetaHarness] You are ${rec.name}${rec.role.file === '(room lens)' ? '' : `, the ${rec.role.name}`}, ${rec.prototype ? `the builder of one prototype, in your working directory, ${rec.cwd},` : 'a maker'} in a brainstorm room: ${rec.askedBy === 'human' ? 'the human' : rec.parent} sent you the ask above.`,
         ...(rec.responsibility ? [`Your responsibility here: ${rec.responsibility}`] : [rec.role.instructions]),
         ...(rec.stance ? [`Your stance: ${rec.stance}`] : []),
         '',
-        `Put what you make on the board (the \`canvas\` tool), then call \`done\` with a short answer.`,
+        rec.prototype ? 'Change the prototype, keep its notes current, then call `done` with a short answer: what changed and what to try.' : `Put what you make on the board (the \`canvas\` tool), then call \`done\` with a short answer.`,
       ].join('\n');
     }
     const lines = [
@@ -1321,7 +1406,12 @@ export class Daemon {
       }
     };
     const own = rec.adapter.ownDirs?.(rec.session?.nativeId ?? '') ?? [];
-    return [...new Set([g.dir, rec.cwd, join(this.home, 'goals', g.id), tmpdir(), ...own].flatMap(p => [normalize(p), real(p)]))];
+    return [...new Set([g.dir, rec.cwd, join(this.home, 'goals', g.id), tmpdir(), ...this.prototypeRoots(g, rec), ...own].flatMap(p => [normalize(p), real(p)]))];
+  }
+
+  /** A prototype's folder for a goal built from it; all of a project's prototypes for a builder, which may port from them. */
+  private prototypeRoots(g: GoalRec, rec: AgentRec): string[] {
+    return [...(g.prototypeFrom ? [g.prototypeFrom.dir] : []), ...(rec.prototype ? [prototypesRoot(this.home, g.project.id)] : [])];
   }
 
   /** Whether a path (relative to the agent's folder) is in one of its places. Symlinks count where they lead. */
@@ -1383,7 +1473,7 @@ export class Daemon {
       const seen = tool === 'Bash' ? elideHeredocs(shown) : shown;
       const j = await this.gatekeeperFor(g).judge({
         agent: rec.name, role: rec.role.name, brief: rec.brief, tool, detail: seen, shared: g.sharedDir,
-        where: `${rec.cwd}${g.room && !rec.quick ? ' (a brainstorm room: it may run and test the code, and write in the shared folder, not change project files)' : rec.worktree ? ' (its own worktree)' : this.sharedCheckout(rec) ? " (the human's checkout, shared with teammates)" : ''}. The project is ${g.dir}; agents work in it, not elsewhere on the machine.${away}`,
+        where: `${rec.cwd}${rec.prototype ? " (a prototype's own folder, a copy kept outside the project: it may change anything in it and run anything to check it, and the project stays as it is)" : g.room && !rec.quick ? ' (a brainstorm room: it may run and test the code, and write in the shared folder, not change project files)' : rec.worktree ? ' (its own worktree)' : this.sharedCheckout(rec) ? " (the human's checkout, shared with teammates)" : ''}. The project is ${g.dir}; agents work in it, not elsewhere on the machine.${away}`,
       });
       this.emit({ goal: rec.goal, agent: rec.name, type: 'approval.gatekeeper', data: { tool, detail: seen.slice(0, 2000), verdict: j.verdict, reason: j.reason, ...(j.remembered ? { remembered: true } : {}) } });
       if (j.verdict === 'allow') return { allow: true };
@@ -1537,8 +1627,8 @@ export class Daemon {
 
   /** Roles a team can spawn (in a project's config): all but the gatekeeper, the assistant and the room lead. */
   teamRoles(c: Config): Role[] {
-    const { gatekeeper, assistant, roomLead } = c.settings;
-    return [...c.roles.values()].filter(r => r.name !== gatekeeper && r.name !== assistant && r.name !== roomLead);
+    const { gatekeeper, assistant, roomLead, toolsmith, agentTools } = c.settings;
+    return [...c.roles.values()].filter(r => r.name !== gatekeeper && r.name !== assistant && r.name !== roomLead && (agentTools || r.name !== toolsmith));
   }
 
   /**
@@ -1973,7 +2063,9 @@ export class Daemon {
       goal: goalId, agent: name, parent: rec.parent, type: 'agent.spawned',
       data: {
         role: rec.role.name, harness: rec.harness, model: rec.model, ...(rec.effort ? { effort: rec.effort } : {}), ...(rec.home ? { home: rec.home } : {}), brief: rec.brief, quick: false, cwd: rec.cwd,
+        ...(rec.responsibility ? { responsibility: rec.responsibility } : {}), ...(rec.stance ? { stance: rec.stance } : {}),
         worktree: wt?.path ?? null, branch: wt?.branch ?? null, base: wt?.base ?? null, ...(wt?.deps?.length ? { deps: wt.deps } : {}),
+        ...(rec.tools.length ? { tools: rec.tools } : {}),
         replaces: old, by: o.by, resumed: !!resume,
       },
     });
@@ -2086,6 +2178,8 @@ export class Daemon {
         });
         if (c.mergedSha) merged(c.mergedSha, c.sha);
         else if (owner) this.commitRules(g, gg, owner, c.sha);
+        // Tools are read from the checkout, so a change counts once it's on the branch the team shares.
+        if (landing) this.toolsCommitted(g, gg, owner, c.sha, c.summary, stats.paths);
       }
       if (fastForwarded) merged(fastForwarded, fastForwarded, true);
       if (landing) this.scheduleLanded(g, gg);
@@ -2134,6 +2228,7 @@ export class Daemon {
     this.pollTimer = setInterval(() => {
       this.refreshGit();
       this.refreshShared();
+      this.refreshPrototypes();
       this.checkCaches();
       this.checkStalls();
       this.releaseIdle();
@@ -2471,13 +2566,86 @@ export class Daemon {
 
   /** The rules as an agent gets them: those pointing at a skill only when it carries the skill. */
   private agentRules(rec: AgentRec): Rule[] {
-    return withSkills(this.cfg(rec).rules.values(), this.skillsFor(rec));
+    const c = this.cfg(rec);
+    // A rule tied to a setting (setting: agentTools) is quiet while that setting is off.
+    const on = [...c.rules.values()].filter(r => !r.setting || (c.settings as unknown as Record<string, unknown>)[r.setting] !== false);
+    return withSkills(on, this.skillsFor(rec));
   }
 
   /** The skills an agent carries: those its role names, and those no role names; on, and for its harness. */
   skillsFor(rec: AgentRec): Skill[] {
     const c = this.cfg(rec);
-    return skillsFor(c.skills.values(), { harness: rec.harness, skills: rec.role.skills ?? [] }, claimedSkills(c.roles.values()));
+    // With agent tools off in the settings, agents don't see the library at all (design §24).
+    const library = [...c.skills.values()].filter(s => !s.tool || c.settings.agentTools);
+    return skillsFor(library, { harness: rec.harness, skills: rec.role.skills ?? [] }, claimedSkills(c.roles.values()));
+  }
+
+  /** The tools in an agent's kit: those it was given at spawn, then those its role names (design §24). */
+  kitFor(rec: AgentRec): Skill[] {
+    return toolKit(this.skillsFor(rec), rec.tools, rec.role.skills ?? []);
+  }
+
+  /**
+   * Reads the project's skills and tools again, for a tool the toolsmith wrote since the config
+   * was loaded. Only skills: roles and the rest still change for agents started from then on.
+   */
+  refreshTools(of: { goal: string } | GoalRec): void {
+    ('project' in of ? of : this.goals.get(of.goal)!).project.reloadSkills();
+  }
+
+  /** An agent read a tool: from now on it hears when the tool changes. */
+  toolRead(rec: AgentRec, tool: string): void {
+    rec.toolsUsed.add(tool);
+  }
+
+  /**
+   * A commit changed tools in the project's tools folder: the library is read again, the agents
+   * who carry or have read a changed tool hear of it, and the lead hears of a new one, so it can
+   * hand it to the teammates who need it. A note never wakes anyone.
+   */
+  private toolsCommitted(g: GoalRec, gg: git.GoalGit, by: string | undefined, sha: string, summary: string, paths: string[]): void {
+    const configDir = join(g.project.dir, '.metaharness');
+    const prefix = toolsPrefix(gg.repo, configDir);
+    const folders = toolsTouched(paths, prefix);
+    if (!folders.length) return;
+    if (!g.project.config.settings.agentTools) return void this.refreshTools(g);
+    const before = new Map([...g.project.config.skills.values()].filter(s => s.tool).map(s => [s.dir, s]));
+    this.refreshTools(g);
+    const after = [...g.project.config.skills.values()].filter(s => s.tool);
+    for (const folder of folders) {
+      const dir = join(configDir, 'tools', folder);
+      const now = after.find(s => s.dir === dir);
+      const was = before.get(dir);
+      const name = now?.name ?? was?.name ?? folder;
+      // New when the commit before had no such folder (a root commit has no commit before).
+      let existed = false;
+      try {
+        existed = git.git(gg.repo, 'ls-tree', '--name-only', `${sha}^`, '--', `${prefix}${folder}`) !== '';
+      } catch {
+        existed = false;
+      }
+      const isNew = !!now && !existed;
+      this.emit({ goal: g.id, agent: by, type: 'tool.changed', data: { tool: name, sha, summary, ...(isNew ? { new: true } : {}), ...(!now ? { removed: true } : {}) } });
+      const who = by ?? 'someone';
+      const commit = `commit ${sha.slice(0, 7)}: ${summary}`;
+      for (const a of g.agents.values()) {
+        if (a.name === by || a.quick || FINISHED.includes(a.state)) continue;
+        const holds = a.tools.includes(name) || a.toolsUsed.has(name) || (a.role.skills ?? []).includes(name);
+        if (holds) {
+          this.sideNote(a, !now
+            ? `[MetaHarness] The tool ${name} was removed by ${who} (${commit}).`
+            : `[MetaHarness] The tool ${name} was changed by ${who} (${commit}). Read it again with skill("${name}") before you next use it.`);
+        } else if (isNew && a.isLead) {
+          this.sideNote(a, `[MetaHarness] New tool from ${who}: ${name}: ${now!.description} Teammates can read it with skill("${name}"); name it in spawn's tools for those who'll need it.`);
+        }
+      }
+    }
+  }
+
+  /** A note for an agent: it joins a running turn, or waits for whatever reaches the agent next. */
+  private sideNote(rec: AgentRec, text: string): void {
+    if (rec.session?.busy() && !FINISHED.includes(rec.state)) this.notice(rec, text);
+    else rec.ruleNotes.push(text);
   }
 
   /** Path and new-file rules for one tool call. */
@@ -2633,6 +2801,9 @@ export class Daemon {
         ? 'Sent to the human for a decision. Their answer (approved, or what to change) will arrive as a message.'
         : 'Sent to the human. Their answer will arrive as a message.';
     }
+    // An on-demand role nobody on the team has (or whose agent was let go) starts with this as its task.
+    const started = this.onDemand(g, from, to, text);
+    if (started !== undefined) return started;
     const r = this.resolveRecipients(g, from, to);
     if ('error' in r) return r.error;
     const lines: string[] = [];
@@ -2675,6 +2846,44 @@ export class Daemon {
       lines.push(`${held.join(', ')} ${one ? 'has' : 'have'} finished, so this didn't wake ${one ? 'it' : 'them'}: ${one ? 'it' : 'they'}'ll see it if woken later. To wake one, send to it by name.`);
     }
     return [r.note, lines.join(' '), sent.length ? `Sent to ${sent.join(', ')}.` : ''].filter(Boolean).join(' ');
+  }
+
+  /**
+   * A message to an on-demand role (the toolsmith) that nobody on the team has: MetaHarness starts
+   * one in the checkout, reporting to the lead, with the message as its task, and tells the sender
+   * and the lead. One per goal: once one is on the team, messages reach it as any teammate's do.
+   * undefined when `to` isn't such a role.
+   */
+  private onDemand(g: GoalRec, from: string, to: string, text: string): string | undefined {
+    if (g.room) return undefined;
+    const c = g.project.config;
+    const smith = c.settings.toolsmith;
+    if (!c.settings.agentTools && resolveName(to, [smith]).match && ![...g.agents.values()].some(a => a.role.name === smith && a.state !== 'ended')) {
+      return `Making and using tools is turned off in the settings, so there's no ${smith} to ask. Do the work without a tool, or ask ${g.lead && g.lead !== from ? g.lead : 'the human'} if you're stuck.`;
+    }
+    const roles = this.teamRoles(c).filter(r => r.onDemand);
+    const res = resolveName(to, roles.map(r => r.name));
+    if (!res.match) return undefined;
+    // A teammate's own name always means that teammate.
+    if ([...g.agents.keys()].some(n => n.toLowerCase() === to.trim().toLowerCase())) return undefined;
+    const role = roles.find(r => r.name === res.match)!;
+    // A crashed one is for the lead to start again; only one that was let go is replaced.
+    if ([...g.agents.values()].some(a => a.role.name === role.name && a.state !== 'ended')) return undefined;
+    const sender = from === 'human' ? 'the human' : from;
+    const brief = `${sender} asked for this:\n\n${text}\n\nAnswer ${sender} with send (to: ${from}) when it's ready, and say so first if it will take a while. Others may send you requests too.`;
+    const parent = g.lead && g.agents.has(g.lead) ? g.lead : 'human';
+    const r = this.spawnAgent(g.id, { role: role.name, roleDef: role, brief, parent, worktree: false, onDemandBy: from });
+    if (!r.ok) return `${role.name} isn't on the team, and MetaHarness couldn't start one: ${r.error}`;
+    this.emit({ goal: g.id, agent: from, type: 'message.sent', data: { to: r.name, text, urgent: false, onDemand: true } });
+    const asker = g.agents.get(from);
+    if (asker) asker.lastPartner = { name: r.name, at: Date.now(), text, sent: true };
+    const lead = g.agents.get(parent);
+    if (lead && lead.name !== from) {
+      const ask = text.length > 300 ? `${text.slice(0, 300)}…` : text;
+      this.sideNote(lead, `[MetaHarness] ${sender} asked for ${role.name}, so MetaHarness started ${r.name} (it starts when messaged). The request: "${ask}" It reports to you when done; dismiss it once nobody needs it.`);
+    }
+    const guessed = res.guessed ? `(Took "${to}" to mean ${role.name}.) ` : '';
+    return `${guessed}${role.name} wasn't on the team, so MetaHarness started ${r.name} with your message as its task. It will answer you soon: carry on with something else, or wait on it.`;
   }
 
   /** Who stands in for an agent that has gone: the nearest one above it still going, or the human. */
@@ -2941,7 +3150,7 @@ export class Daemon {
 
   /** Whether an agent works in the human's checkout, which teammates share, rather than its own worktree. */
   private sharedCheckout(rec: AgentRec): boolean {
-    return !rec.worktree && !!this.goals.get(rec.goal)?.git;
+    return !rec.worktree && !rec.prototype && !!this.goals.get(rec.goal)?.git;
   }
 
   /** A directory of the agent's own, outside its worktree, for harness config such as hooks. */
@@ -3003,7 +3212,7 @@ export class Daemon {
       case 'edit': {
         const g = this.goals.get(rec.goal)!;
         const inside = (dir: string) => !!t.path && (t.path === dir || t.path.startsWith(dir.endsWith('/') ? dir : dir + '/'));
-        if (g.room && !rec.quick && !inside(g.sharedDir)) {
+        if (g.room && !rec.quick && !inside(g.sharedDir) && !(rec.prototype && inside(rec.cwd))) {
           return { allow: false, reason: `This is a brainstorm room: nobody changes the project's files here; your own files (images, demos, reports) go in the shared folder, ${g.sharedDir}. Say what you'd change in your answer: building it is for a goal, once the human decides.` };
         }
         if (rec.role.permissionMode === 'default' || (rec.quick && !inside(g.sharedDir))) return 'ask';
@@ -3854,6 +4063,12 @@ export class Daemon {
       a.doneNote ??= `${a.name} was stopped when the goal ended.`;
       this.stopAgent(goalId, a.name, by);
     }
+    if (g.room) {
+      for (const { dir, p } of this.prototypesOf(g)) {
+        if (p.room === g.id) this.keepRoomRecord(g, dir);
+        this.roomGodotStop(g.id, prototypeFile(p.id));
+      }
+    }
     g.status = 'ended';
     void g.gatekeeper?.stop();
     this.emit({ goal: goalId, type: 'goal.ended', data: { reason: `ended by ${by}`, stopped } });
@@ -3945,12 +4160,18 @@ export class Daemon {
         for (const c of room.canvas.cards) {
           const src = c.file && join(seed.dir, c.file);
           if (!src || !existsSync(src)) continue;
+          // A Godot demo is its whole folder.
+          if (isGodotDemo(c.file!)) {
+            cpSync(dirname(src), dirname(join(sharedDir, c.file!)), { recursive: true, filter: f => basename(f) !== GODOT_CACHE });
+            continue;
+          }
           mkdirSync(join(sharedDir, c.file!, '..'), { recursive: true });
           copyFileSync(src, join(sharedDir, c.file!));
         }
       }
     }
     this.canvasChanged(g);
+    this.adoptPrototypes(g);
     if (o.from && o.cards?.length) this.markBranch(o.from, o.cards, id);
     const r = this.spawnAgent(id, { role: leadRole.name, roleDef: leadRole, brief: this.roomOpening(g, seed?.cards.length ?? 0, attachments), parent: 'human', isLead: true, name: 'lead' });
     if (!r.ok) {
@@ -4048,7 +4269,7 @@ export class Daemon {
       if (!existsSync(src)) continue;
       const copy = (s: string, r: string) => {
         if (statSync(s).isDirectory()) {
-          for (const e of readdirSync(s)) if (e !== HISTORY) copy(join(s, e), `${r}/${e}`);
+          for (const e of readdirSync(s)) if (e !== HISTORY && e !== GODOT_CACHE) copy(join(s, e), `${r}/${e}`);
           return;
         }
         mkdirSync(dirname(join(to, 'imported', r)), { recursive: true });
@@ -4095,7 +4316,19 @@ export class Daemon {
 
   /** The makers as the lead reads them. */
   private lensRoster(g: GoalRec): string[] {
-    return lensLines(g.room!.lenses, n => g.agents.has(n), p => this.makerCan(p, g.project.config));
+    return lensLines(g.room!.lenses.filter(l => !l.prototype), n => g.agents.has(n), p => this.makerCan(p, g.project.config));
+  }
+
+  /** The prototypes as the lead reads them. */
+  private prototypeRoster(g: GoalRec): string[] {
+    return this.prototypesOf(g).map(({ p }) => `- ${p.id} (card ${p.card}): ${p.title}, at v${latest(p).n}${p.verdict ? `, ${p.verdict.kind}` : ''}`);
+  }
+
+  /** What a prototype's builder is told. */
+  private builderMethodology(g: GoalRec, rec: AgentRec, paths: RoomPaths): string {
+    const dir = this.prototypeFolder(g.project, rec.prototype!);
+    const p = loadPrototype(dir);
+    return prototypeMethodology({ topic: g.request, lead: g.lead || 'lead', paths, id: rec.prototype!, title: p?.title ?? rec.prototype!, card: p?.card, repo: rec.cwd, project: g.dir, godot: p?.godot, otherPrototypes: dirname(dir) });
   }
 
   /** What a maker's harness can do: the first route of its role that runs here. */
@@ -4164,6 +4397,607 @@ export class Daemon {
     return lenses.find(c => c.name!.toLowerCase() === t) ?? lenses.find(c => c.role?.toLowerCase() === t && !c.off) ?? lenses.find(c => c.role?.toLowerCase() === t);
   }
 
+  /* ---------------- prototypes (design §21) ---------------- */
+
+  private prototypeFolder(project: Project, id: string): string {
+    // Ids are made by prototypeId; one from outside can't reach anywhere else.
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) throw new Error(`There's no prototype called ${id}.`);
+    return join(prototypesRoot(this.home, project.id), id);
+  }
+
+  /** The prototypes on a room's board, from their builders. */
+  private prototypesOf(g: GoalRec): { dir: string; p: Prototype }[] {
+    return (g.room?.lenses ?? [])
+      .filter(l => l.prototype)
+      .map(l => ({ dir: this.prototypeFolder(g.project, l.prototype!), id: l.prototype! }))
+      .map(({ dir }) => ({ dir, p: loadPrototype(dir) }))
+      .filter((x): x is { dir: string; p: Prototype } => !!x.p);
+  }
+
+  private emitPrototypes(g: GoalRec): void {
+    this.emit({
+      goal: g.id, type: 'room.prototypes',
+      data: {
+        prototypes: this.prototypesOf(g).map(({ dir, p }) => {
+          const scene = p.godot === undefined ? undefined : sceneOf(prototypeRepo(dir), p.godot);
+          return { ...p, dir, ...(scene ? { scene } : {}) };
+        }),
+      },
+    });
+  }
+
+  /** One thing at a time per prototype: freezing a game can take a while, and it mustn't hold the daemon up. */
+  private prototypeJob(g: GoalRec, id: string, work: () => Promise<void>): void {
+    const job = (this.prototypeJobs.get(id) ?? Promise.resolve())
+      .then(work)
+      .catch(e => this.roomNote(g, `The prototype ${id} ran into a problem: ${(e as Error).message}`))
+      .finally(() => {
+        if (this.prototypeJobs.get(id) === job) this.prototypeJobs.delete(id);
+      });
+    this.prototypeJobs.set(id, job);
+  }
+
+  /** Resolves once the prototype work under way is done (for tests and close). */
+  async prototypesIdle(): Promise<void> {
+    while (this.prototypeJobs.size) await Promise.all(this.prototypeJobs.values());
+  }
+
+  private tuneScript(): string {
+    return readFileSync(join(BUILTIN_DIR, 'godot', 'mh_tune.gd'), 'utf8');
+  }
+
+  /** A checkout of the room's project to freeze: the human's, or one of its git worktrees. */
+  private checkoutOf(g: GoalRec, source?: string): string {
+    if (!source || realDir(source) === realDir(g.dir)) return g.dir;
+    let worktrees = '';
+    try {
+      worktrees = git.git(g.dir, 'worktree', 'list', '--porcelain');
+    } catch {
+      // Not a repository: it has no other checkouts.
+    }
+    const real = realDir(source);
+    if (!worktrees.split('\n').some(l => l === `worktree ${real}`)) throw new Error(`${source} isn't a checkout or a worktree of this project.`);
+    return real;
+  }
+
+  /** Reserves a name, a builder and a card for a prototype about to be made. */
+  private newPrototype(g: GoalRec, o: { title: string; maker: Lens; from?: Ingredient[]; by: string }): { id: string; card: string; lens: Lens } {
+    const taken = [...g.agents.keys(), ...g.room!.lenses.map(l => l.name!), ...this.takenPrototypes(g.project)];
+    const id = prototypeId(o.title, taken);
+    const { off: _off, name: _name, prototype: _prototype, ...maker } = o.maker;
+    const lens: Lens = { ...maker, name: id, prototype: id };
+    g.room!.lenses.push(lens);
+    const c = g.room!.canvas;
+    const card: Card = { id: `c${++c.seq}`, kind: 'prototype', title: o.title, by: o.by, prototype: id, ...(o.from?.length ? { from: o.from } : {}) };
+    c.cards.push(card);
+    mkdirSync(this.prototypeFolder(g.project, id), { recursive: true });
+    return { id, card: card.id, lens };
+  }
+
+  private takenPrototypes(project: Project): string[] {
+    const root = prototypesRoot(this.home, project.id);
+    return existsSync(root) ? readdirSync(root) : [];
+  }
+
+  /** A prototype that couldn't be made leaves nothing behind but a line in the chat. */
+  private prototypeFailed(g: GoalRec, made: { id: string; card: string }, e: unknown): void {
+    rmSync(this.prototypeFolder(g.project, made.id), { recursive: true, force: true });
+    if (g.status !== 'ended') {
+      g.room!.lenses = g.room!.lenses.filter(l => l.prototype !== made.id);
+      applyCanvas(g.room!.canvas, [{ op: 'remove', id: made.card }], 'MetaHarness');
+      this.canvasChanged(g);
+      this.emitLenses(g);
+      this.emitPrototypes(g);
+      this.roomNote(g, `Couldn't make the prototype ${made.id}: ${(e as Error).message}`);
+    }
+  }
+
+  /** The new prototype's first version, saved, and its builder given its first ask (if it has one yet). */
+  private async prototypeReady(g: GoalRec, made: { id: string; card: string; lens: Lens }, p: Prototype, ask: string | undefined, shown: string, by: string): Promise<void> {
+    const dir = this.prototypeFolder(g.project, p.id);
+    await tagVersion(prototypeRepo(dir), 0, p.versions[0].sha);
+    savePrototype(dir, p);
+    logProcess(dir, `Started: ${p.title}`, p.idea);
+    this.emitPrototypes(g);
+    if (g.status === 'ended') return;
+    const card = g.room!.canvas.cards.find(c => c.id === made.card);
+    if (!ask) {
+      if (card?.pending) {
+        delete card.pending;
+        this.canvasChanged(g);
+      }
+      return;
+    }
+    if (card) {
+      card.pending = made.lens.name;
+      this.canvasChanged(g);
+    }
+    this.sendMaker(g, made.lens, ask, by === 'human' ? 'human' : g.lead, shown);
+  }
+
+  /**
+   * Starts a prototype per idea, each with a builder of its own, working at once. From `game`,
+   * the checkout is frozen once and they all start from that same commit, so they merge cleanly.
+   */
+  roomPrototypes(goalId: string, o: { ideas: { title: string; ask?: string; card?: string }[]; from: 'game' | 'small'; source?: string; maker?: string; by: string }): string {
+    const g = this.openRoom(goalId);
+    const ideas = o.ideas.map(i => ({ ...i, title: i.title?.trim() ?? '' })).filter(i => i.title);
+    if (!ideas.length) throw new Error('A prototype needs a title: what idea it tries.');
+    const source = o.from === 'game' ? this.checkoutOf(g, o.source) : undefined;
+    const maker = this.pickMaker(g, o.maker, 'demo');
+    const c = g.room!.canvas;
+    const made = ideas.map(i => {
+      const idea = i.card ? c.cards.find(x => x.id === i.card) : undefined;
+      const m = this.newPrototype(g, { title: i.title, maker, by: o.by, ...(idea ? { from: [{ id: idea.id, take: 'the idea' }] } : {}) });
+      const card = c.cards.find(x => x.id === m.card)!;
+      card.pending = m.id;
+      const ask = i.ask?.trim() || (idea ? [idea.title, idea.text].filter(Boolean).join('\n\n') : i.title);
+      return { ...m, title: i.title, ask, idea: idea?.id };
+    });
+    this.canvasChanged(g);
+    this.emitLenses(g);
+    if (o.by === 'human') this.tellLead(g, `[Room] The human started prototypes: ${made.map(m => `${m.id} (card ${m.card})`).join(', ')}.`);
+    this.prototypeJob(g, made[0].id, async () => {
+      const script = this.tuneScript();
+      let shared: { repo: string; sha: string; godot?: string; frozen?: Prototype['frozen']; start: PrototypeStart; top: string } | undefined;
+      for (const m of made) {
+        try {
+          const dir = this.prototypeFolder(g.project, m.id);
+          const repo = prototypeRepo(dir);
+          const base = { id: m.id, title: m.title, idea: m.ask, project: g.dir, createdAt: new Date().toISOString(), kept: [], room: g.id, card: m.card, rerun: true };
+          let p: Prototype;
+          if (source) {
+            if (shared) await cloneVersion(shared.repo, shared.sha, repo);
+            else {
+              const f = await freezeFolder(source, repo);
+              const godot = await installTools(repo, script);
+              const start: PrototypeStart = { kind: 'game', source, ...(f.commit ? { commit: f.commit } : {}), ...(f.branch ? { branch: f.branch } : {}), uncommitted: f.uncommitted };
+              shared = { repo, sha: await headOf(repo), godot, start, top: f.top, frozen: { source, ...(f.commit ? { commit: f.commit } : {}), ...(f.branch ? { branch: f.branch } : {}), uncommitted: f.uncommitted, at: new Date().toISOString() } };
+            }
+            if (shared.godot !== undefined) await copyGodotCache(shared.top, repo, shared.godot);
+            p = { ...base, start: shared.start, base: shared.sha, ...(shared.frozen ? { frozen: shared.frozen } : {}), ...(shared.godot !== undefined ? { godot: shared.godot } : {}), versions: [{ n: 0, sha: shared.sha, at: base.createdAt, note: `Frozen from ${source}${shared.frozen?.uncommitted ? ', with what wasn\'t committed there' : ''}` }] };
+          } else {
+            await smallProject(repo, m.title);
+            const godot = await installTools(repo, script);
+            const sha = await headOf(repo);
+            p = { ...base, start: { kind: 'small' }, base: sha, ...(godot !== undefined ? { godot } : {}), versions: [{ n: 0, sha, at: base.createdAt, note: 'A small project of its own' }] };
+          }
+          await this.prototypeReady(g, m, p, m.ask, `Prototype: ${m.title}`, o.by);
+        } catch (e) {
+          this.prototypeFailed(g, m, e);
+        }
+      }
+    });
+    return `Making ${made.length === 1 ? `the prototype ${made[0].id} (card ${made[0].card})` : `${made.length} prototypes: ${made.map(m => `${m.id} (${m.card})`).join(', ')}`}. Their builders' answers reach ${o.by === 'human' ? 'the chat' : 'you as messages: end your turn meanwhile'}.`;
+  }
+
+  /** A prototype by id, in the room's project. */
+  private prototypeOf(g: GoalRec, id: string): { dir: string; p: Prototype } {
+    const dir = this.prototypeFolder(g.project, id);
+    const p = loadPrototype(dir);
+    if (!p) throw new Error(`There's no prototype called ${id}.`);
+    return { dir, p };
+  }
+
+  private versionIn(p: Prototype, n?: number): PrototypeVersion {
+    const v = versionOf(p, n);
+    if (!v) throw new Error(`${p.id} has no version ${n}: it goes up to ${latest(p).n}.`);
+    return v;
+  }
+
+  /** A variation of a prototype, from any of its versions. It keeps the history, the values kept by then and the base. */
+  roomPrototypeFork(goalId: string, o: { id: string; version?: number; title: string; ask?: string; maker?: string; by: string }): string {
+    const g = this.openRoom(goalId);
+    const { dir: fromDir, p: parent } = this.prototypeOf(g, o.id);
+    const v = this.versionIn(parent, o.version);
+    const title = o.title?.trim();
+    if (!title) throw new Error('A fork needs a title: what it tries differently.');
+    const maker = this.pickMaker(g, o.maker, 'demo');
+    const parentCard = parent.room === g.id ? parent.card : undefined;
+    const m = this.newPrototype(g, { title, maker, by: o.by, ...(parentCard ? { from: [{ id: parentCard, take: `v${v.n}` }] } : {}) });
+    g.room!.canvas.cards.find(c => c.id === m.card)!.pending = m.id;
+    this.canvasChanged(g);
+    this.emitLenses(g);
+    this.prototypeJob(g, m.id, async () => {
+      try {
+        const repo = prototypeRepo(this.prototypeFolder(g.project, m.id));
+        await cloneVersion(prototypeRepo(fromDir), v.sha, repo);
+        if (parent.godot !== undefined) {
+          writeTuning(repo, parent.godot, keptAt(parent, v.n));
+          const source = String(parent.frozen?.source ?? '');
+          if (source && existsSync(source)) await copyGodotCache(source, repo, parent.godot);
+        }
+        const p: Prototype = {
+          id: m.id, title, idea: o.ask?.trim() || title, project: g.dir, createdAt: new Date().toISOString(), start: { kind: 'fork', from: parent.id, version: v.n }, base: parent.base,
+          ...(parent.frozen ? { frozen: parent.frozen } : {}), ...(parent.godot !== undefined ? { godot: parent.godot } : {}),
+          versions: [{ n: 0, sha: v.sha, at: new Date().toISOString(), note: `Forked from ${parent.id} v${v.n}` }], kept: [], room: g.id, card: m.card, rerun: true,
+        };
+        const kept = keptAt(parent, v.n);
+        if (Object.keys(kept).length) p.kept.push({ version: 0, values: kept, at: p.createdAt });
+        await this.prototypeReady(g, m, p, o.ask?.trim() || undefined, `Fork of ${parent.id} v${v.n}: ${title}`, o.by);
+      } catch (e) {
+        this.prototypeFailed(g, m, e);
+      }
+    });
+    return `Forking ${parent.id} v${v.n} as ${m.id} (card ${m.card}).`;
+  }
+
+  /** What merging these would come to, changing no files. */
+  async prototypeMergePreview(goalId: string, from: { id: string; version?: number }[]): Promise<{ conflicts: string[]; unrelated: string[] }> {
+    const g = this.goals.get(goalId)!;
+    const list = from.map(f => {
+      const { dir, p } = this.prototypeOf(g, f.id);
+      const v = this.versionIn(p, f.version);
+      return { repo: prototypeRepo(dir), sha: v.sha, n: v.n, label: p.id };
+    });
+    return mergePreview(list);
+  }
+
+  /**
+   * One prototype from several, to play them together: a new one from the first, then each of the
+   * others merged in. Git does what it can; conflicts go to the new prototype's builder, and one
+   * with no history in common is its builder's to port by hand.
+   */
+  roomPrototypeMerge(goalId: string, o: { from: { id: string; version?: number }[]; title: string; ask?: string; maker?: string; by: string }): string {
+    const g = this.openRoom(goalId);
+    if (new Set(o.from.map(f => f.id)).size < 2) throw new Error('A merge needs at least two prototypes.');
+    const title = o.title?.trim();
+    if (!title) throw new Error('A merge needs a title.');
+    const from = o.from.map(f => {
+      const { dir, p } = this.prototypeOf(g, f.id);
+      return { dir, p, v: this.versionIn(p, f.version) };
+    });
+    const maker = this.pickMaker(g, o.maker, 'demo');
+    const m = this.newPrototype(g, { title, maker, by: o.by, from: from.filter(f => f.p.room === g.id && f.p.card).map(f => ({ id: f.p.card!, take: `v${f.v.n}` })) });
+    g.room!.canvas.cards.find(c => c.id === m.card)!.pending = m.id;
+    this.canvasChanged(g);
+    this.emitLenses(g);
+    const [first, ...rest] = from;
+    this.prototypeJob(g, m.id, async () => {
+      try {
+        const dir = this.prototypeFolder(g.project, m.id);
+        const repo = prototypeRepo(dir);
+        await cloneVersion(prototypeRepo(first.dir), first.v.sha, repo);
+        const kept = Object.assign({}, ...from.map(f => keptAt(f.p, f.v.n))) as Record<string, number>;
+        if (first.p.godot !== undefined) {
+          writeTuning(repo, first.p.godot, kept);
+          const source = String(first.p.frozen?.source ?? '');
+          if (source && existsSync(source)) await copyGodotCache(source, repo, first.p.godot);
+        }
+        const at = new Date().toISOString();
+        const p: Prototype = {
+          id: m.id, title, idea: o.ask?.trim() || title, project: g.dir, createdAt: at, start: { kind: 'merge', from: from.map(f => ({ id: f.p.id, version: f.v.n })) }, base: first.p.base,
+          ...(first.p.frozen ? { frozen: first.p.frozen } : {}), ...(first.p.godot !== undefined ? { godot: first.p.godot } : {}),
+          versions: [{ n: 0, sha: first.v.sha, at, note: `From ${first.p.id} v${first.v.n}` }], kept: Object.keys(kept).length ? [{ version: 0, values: kept, at }] : [], room: g.id, card: m.card, rerun: true,
+          merging: rest.map(f => ({ id: f.p.id, version: f.v.n })),
+        };
+        await tagVersion(repo, 0, p.versions[0].sha);
+        savePrototype(dir, p);
+        logProcess(dir, `Merging: ${title}`, from.map(f => `- ${f.p.id} v${f.v.n}: ${f.p.title}`).join('\n'));
+        this.emitPrototypes(g);
+        await this.continueMerge(g, dir, p, o.ask, o.by);
+      } catch (e) {
+        this.prototypeFailed(g, m, e);
+      }
+    });
+    return `Merging ${from.map(f => `${f.p.id} v${f.v.n}`).join(' + ')} into ${m.id} (card ${m.card}).`;
+  }
+
+  /** Merges what's left. A conflict stops it there and goes to the builder; its next turn's end carries on. */
+  private async continueMerge(g: GoalRec, dir: string, p: Prototype, ask: string | undefined, by: string, afterConflict = false): Promise<void> {
+    const repo = prototypeRepo(dir);
+    const merged: string[] = [];
+    const conflictOf = (next: { id: string; version: number }, files: string[]) =>
+      [
+        `[Merge] Merging ${next.id} v${next.version} into this prototype left conflicts in: ${files.join(', ')}.`,
+        'Settle them by editing those files: keep what both ideas need and take the conflict markers out. Run no git commands: MetaHarness finishes the merge when your turn ends.',
+        ...(ask?.trim() ? ['', `What the human wants from this merge: ${ask.trim()}`] : []),
+      ].join('\n');
+    while (p.merging?.length) {
+      const next = p.merging[0];
+      const otherDir = join(dirname(dir), next.id);
+      if (!loadPrototype(otherDir)) {
+        p.merging.shift();
+        continue;
+      }
+      const r = await mergeVersion(repo, prototypeRepo(otherDir), next.version, `Merge ${next.id} v${next.version}`);
+      p.merging.shift();
+      if ('conflicts' in r) {
+        p.conflicts = r.conflicts;
+        savePrototype(dir, p);
+        logProcess(dir, `Conflicts merging ${next.id} v${next.version}`, r.conflicts.join('\n'));
+        this.emitPrototypes(g);
+        const lens = g.room?.lenses.find(l => l.prototype === p.id);
+        if (lens && g.status !== 'ended') this.sendMaker(g, lens, conflictOf(next, r.conflicts), by === 'human' ? 'human' : g.lead, `Settle the conflicts from merging ${next.id} v${next.version}`);
+        return;
+      }
+      if ('unrelated' in r) (p.port ??= []).push(next);
+      else merged.push(`${next.id} v${next.version}`);
+    }
+    delete p.merging;
+    delete p.conflicts;
+    const sha = await headOf(repo);
+    if (sha !== latest(p).sha) await this.addVersion(dir, p, sha, merged.length ? `Merged ${merged.join(' + ')}` : 'Merged');
+    savePrototype(dir, p);
+    logProcess(dir, 'Merged', [...merged, ...(p.port ?? []).map(x => `${x.id} v${x.version}: to port by hand`)].join('\n'));
+    this.emitPrototypes(g);
+    const lens = g.room?.lenses.find(l => l.prototype === p.id);
+    if (!lens || g.status === 'ended') return;
+    // The builder has just settled the last conflict and checked it: there's only more to say if something else came of it.
+    if (afterConflict && !merged.length && !p.port?.length) return;
+    const others = (p.port ?? []).map(x => `- ${x.id} v${x.version}: ${prototypeRepo(join(dirname(dir), x.id))} (read a file as it was with \`git -C <that folder> show v${x.version}:<path>\`; its notes are in .prototype/NOTES.md there)`);
+    const text = [
+      '[Merge] The prototypes it comes from are merged into your folder.',
+      ...(others.length ? ['', 'These share no history with this one, so git could not merge them. Port what they prove into your folder by hand:', ...others] : []),
+      '',
+      'Check it opens and that both ideas work together. Their sliders and kept values came along; say what clashes (two effects fighting each other, values that need tuning again), and bring the notes up to date.',
+      ...(ask?.trim() ? ['', `What the human wants from this merge: ${ask.trim()}`] : []),
+    ].join('\n');
+    this.sendMaker(g, lens, text, by === 'human' ? 'human' : g.lead, `Check the merge${ask?.trim() ? `: ${ask.trim()}` : ''}`);
+  }
+
+  private async addVersion(dir: string, p: Prototype, sha: string, note: string): Promise<PrototypeVersion> {
+    const v: PrototypeVersion = { n: latest(p).n + 1, sha, at: new Date().toISOString(), note: note.replace(/\s+/g, ' ').trim().slice(0, 240) };
+    await tagVersion(prototypeRepo(dir), v.n, sha);
+    p.versions.push(v);
+    logProcess(dir, `Version ${v.n}`, note);
+    return v;
+  }
+
+  /** A builder's turn ended: what's in its folder is a new version, the game reopens if it's running, and any merge carries on. */
+  private prototypeAnswered(g: GoalRec, id: string, note: string, stopped: boolean): void {
+    const dir = this.prototypeFolder(g.project, id);
+    this.prototypeJob(g, id, async () => {
+      const p = loadPrototype(dir);
+      if (!p) return;
+      const summary = note.split('\n').find(l => l.trim()) ?? 'Changed';
+      const r = await commitAll(prototypeRepo(dir), `${stopped ? '(stopped) ' : ''}${summary}`.slice(0, 200));
+      if ('conflicts' in r) {
+        p.conflicts = r.conflicts;
+        savePrototype(dir, p);
+        logProcess(dir, 'Answer, with conflicts left', note);
+        this.emitPrototypes(g);
+        this.roomNote(g, `${id} still has conflicts in ${r.conflicts.join(', ')}: it isn't a new version until they're settled. Ask it to finish.`);
+        return;
+      }
+      delete p.conflicts;
+      const changed = r.sha !== latest(p).sha;
+      if (changed) await this.addVersion(dir, p, r.sha, `${stopped ? '(stopped) ' : ''}${note}`);
+      else logProcess(dir, 'Answer, with no change', note);
+      savePrototype(dir, p);
+      this.emitPrototypes(g);
+      if (p.merging) await this.continueMerge(g, dir, p, undefined, 'human', true);
+      else if (changed && p.rerun && this.godotRuns.has(`${g.id}:${prototypeFile(id)}`)) this.prototypeRun(g.id, id);
+    });
+  }
+
+  /** Back to a version, as a new one on top: nothing in between is lost. */
+  roomPrototypeRestore(goalId: string, id: string, version: number): string {
+    const g = this.openRoom(goalId);
+    const { dir, p } = this.prototypeOf(g, id);
+    const v = this.versionIn(p, version);
+    if (g.agents.get(id)?.session?.busy()) throw new Error(`${id}'s builder is working: stop it first, or wait for its answer.`);
+    this.prototypeJob(g, id, async () => {
+      const fresh = loadPrototype(dir)!;
+      const sha = await restoreVersion(prototypeRepo(dir), v.sha, `Back to v${v.n}`);
+      if (sha !== latest(fresh).sha) await this.addVersion(dir, fresh, sha, `Back to v${v.n}`);
+      savePrototype(dir, fresh);
+      this.emitPrototypes(g);
+      this.tellLead(g, `[Room] The human took ${id} back to v${v.n}.`);
+      const lens = g.room!.lenses.find(l => l.prototype === id);
+      if (lens && g.agents.has(id)) g.agents.get(id)!.ruleNotes.push(`[Room] The human took this prototype back to v${v.n}: your folder is as it was then, and what you did since is in the git history.`);
+      if (fresh.rerun && this.godotRuns.has(`${g.id}:${prototypeFile(id)}`)) this.prototypeRun(g.id, id);
+    });
+    return `Going back to v${v.n} of ${id}.`;
+  }
+
+  /** The human's verdict on a prototype: kept for production, parked or dropped, and what it taught them. */
+  roomPrototypeVerdict(goalId: string, id: string, o: { kind?: string; why?: string; version?: number }): string {
+    const g = this.openRoom(goalId);
+    const { dir, p } = this.prototypeOf(g, id);
+    if (o.kind === 'keep' || o.kind === 'park' || o.kind === 'drop') {
+      p.verdict = { kind: o.kind, ...(o.why?.trim() ? { why: o.why.trim() } : {}), version: this.versionIn(p, o.version).n, at: new Date().toISOString() };
+      logProcess(dir, `Verdict: ${o.kind}, at v${p.verdict.version}`, o.why);
+    } else {
+      delete p.verdict;
+      logProcess(dir, 'Verdict taken back');
+    }
+    savePrototype(dir, p);
+    const card = p.room === g.id ? g.room!.canvas.cards.find(c => c.id === p.card) : undefined;
+    if (card) {
+      if (o.kind === 'keep') card.status = 'settled';
+      else if (o.kind === 'drop') card.status = 'dropped';
+      else delete card.status;
+      this.canvasChanged(g);
+    }
+    this.emitPrototypes(g);
+    this.tellLead(g, `[Room] The human's verdict on ${id}: ${o.kind ?? 'none'}${o.why?.trim() ? ` (${o.why.trim()})` : ''}.`);
+    return `${id}: ${o.kind ?? 'no verdict'}.`;
+  }
+
+  /** Opens a prototype's game in a window, where the Run button says it will. A second press restarts it. */
+  prototypeRun(goalId: string, id: string): string {
+    const g = this.goals.get(goalId);
+    if (!g?.room) throw new Error(`There's no room ${goalId} open here.`);
+    const { dir, p } = this.prototypeOf(g, id);
+    if (p.godot === undefined) throw new Error(`${id} has no project.godot to open yet.`);
+    const repo = prototypeRepo(dir);
+    return this.godotStart(goalId, prototypeFile(id), join(repo, p.godot), sceneOf(repo, p.godot));
+  }
+
+  /** What the game's Keep button left: a decision on the board, and a record on the prototype. */
+  refreshPrototypes(): void {
+    for (const g of this.goals.values()) {
+      if (!g.room || g.status === 'ended') continue;
+      for (const { dir, p } of this.prototypesOf(g)) {
+        if (p.godot === undefined || p.room !== g.id) continue;
+        const values = takeKept(prototypeRepo(dir), p.godot);
+        if (!values) continue;
+        const version = latest(p).n;
+        p.kept.push({ version, values, at: new Date().toISOString() });
+        savePrototype(dir, p);
+        logProcess(dir, `Values kept, on v${version}`, Object.entries(values).map(([k, v]) => `- ${k} = ${v}`).join('\n'));
+        const card = g.room.canvas.cards.find(c => c.id === p.card);
+        this.roomCanvas(g.id, [{ op: 'add', kind: 'decision', title: `${p.title}: these values (v${version})`, values, ...(card ? { from: [{ id: card.id, take: 'its values' }] } : {}), ...(card?.frame ? { frame: card.frame } : {}) }], 'human');
+        this.emitPrototypes(g);
+      }
+    }
+  }
+
+  /** What a builder works in, and whether this room may still use it. */
+  private prototypePlace(g: GoalRec, id: string): { cwd: string; id: string } | { error: string } {
+    const dir = this.prototypeFolder(g.project, id);
+    const p = loadPrototype(dir);
+    if (!p) return { error: `The prototype ${id} isn't there any more.` };
+    if (p.room && p.room !== g.id) return { error: `${id} has moved to room ${p.room}: ask it there.` };
+    return { id, cwd: prototypeRepo(dir) };
+  }
+
+  /** A new room carries a prototype card's prototype: its builder there starts fresh, from the folder and its notes. */
+  private adoptPrototypes(g: GoalRec): void {
+    const taken = new Set<string>();
+    for (const card of g.room!.canvas.cards) {
+      if (!card.prototype || taken.has(card.prototype)) continue;
+      const dir = this.prototypeFolder(g.project, card.prototype);
+      const p = loadPrototype(dir);
+      if (!p) continue;
+      taken.add(card.prototype);
+      const was = p.room;
+      p.room = g.id;
+      p.card = card.id;
+      savePrototype(dir, p);
+      const maker = g.room!.lenses.find(l => !l.off && !l.prototype && makesOf(l) === 'demo') ?? { role: 'prototyper' };
+      const { off: _off, name: _name, ...lens } = maker;
+      g.room!.lenses.push({ ...lens, name: card.prototype, prototype: card.prototype });
+      const old = was ? this.goals.get(was) : undefined;
+      if (old?.room && old.status !== 'ended') this.emitPrototypes(old);
+    }
+    if (taken.size) {
+      this.emitLenses(g);
+      this.emitPrototypes(g);
+    }
+  }
+
+  /** The room's chat and board, kept with its prototypes: a goal built from one reads them after the room is deleted. */
+  private keepRoomRecord(g: GoalRec, dir: string): void {
+    const paths = this.roomPaths(g);
+    for (const [from, to] of [[paths.chat, 'room-chat.md'], [paths.canvas, 'room-board.md']] as const) {
+      try {
+        if (existsSync(from)) copyFileSync(from, join(dir, to));
+      } catch {
+        // The room still has it.
+      }
+    }
+  }
+
+  /** A prototype's own process, then those of what it was forked or merged from, while they're there. */
+  private processOf(dir: string, p: Prototype, seen = new Set<string>()): string {
+    seen.add(p.id);
+    const own = existsSync(processFile(dir)) ? readFileSync(processFile(dir), 'utf8') : '';
+    const parents = p.start.kind === 'fork' ? [p.start.from] : p.start.kind === 'merge' ? p.start.from.map(f => f.id) : [];
+    const out = [`## ${p.id}: ${p.title}\n\n${own}`];
+    for (const id of parents) {
+      if (seen.has(id)) continue;
+      const parentDir = join(dirname(dir), id);
+      const parent = loadPrototype(parentDir);
+      if (parent) out.push(this.processOf(parentDir, parent, seen));
+    }
+    return out.join('\n');
+  }
+
+  /**
+   * What a goal built from a prototype gets (`imported/prototype/<id>/`): what the version changed
+   * against the frozen game, its notes, the process, the room's chat and board and the values
+   * kept. It reads the prototype itself where it is, and can play it.
+   */
+  private async prototypeHandoff(project: Project, id: string, version?: number): Promise<NonNullable<GoalRec['prototypeFrom']> & { stage: string; background: (shared: string) => string }> {
+    const dir = this.prototypeFolder(project, id);
+    const p = loadPrototype(dir);
+    if (!p) throw new Error(`There's no prototype called ${id}.`);
+    const v = this.versionIn(p, version ?? p.verdict?.version);
+    const open = p.room ? this.goals.get(p.room) : undefined;
+    if (open?.room) this.keepRoomRecord(open, dir);
+    const repo = prototypeRepo(dir);
+    const stage = join(dir, `.handoff-${randomUUID().slice(0, 8)}`);
+    mkdirSync(stage, { recursive: true });
+    const godot = p.godot ?? '';
+    await writeChanges(repo, p.base, v.sha, join(stage, 'changes.diff'));
+    writeFileSync(join(stage, 'NOTES.md'), (await notesAt(repo, v.sha, godot)) ?? '(no notes)\n');
+    writeFileSync(join(stage, 'process.md'), `# How ${p.id} came about\n\n${this.processOf(dir, p)}`);
+    const values = keptAt(p, v.n);
+    if (Object.keys(values).length) writeFileSync(join(stage, 'values.json'), JSON.stringify(values, null, 2) + '\n');
+    for (const f of ['room-chat.md', 'room-board.md']) if (existsSync(join(dir, f))) copyFileSync(join(dir, f), join(stage, f));
+    const moved = p.frozen?.commit ? await movedOn(project.dir, p.frozen.commit) : undefined;
+    logProcess(dir, `A goal builds this for production, from v${v.n}`);
+    const background = (shared: string) => {
+      const here = join(shared, 'imported', 'prototype', id);
+      const has = (f: string) => existsSync(join(stage, f)) || existsSync(join(here, f));
+      return [
+        `[MetaHarness] This goal builds "${p.title}" for production, from a prototype made in a brainstorm room (${p.id}, v${v.n}). The idea: ${p.idea}`,
+        p.verdict?.why ? `The human's verdict: ${p.verdict.kind}: ${p.verdict.why}` : '',
+        `- The prototype, to read and play but not change: ${repo}. It's at v${latest(p).n}${latest(p).n === v.n ? '' : `, so read v${v.n}'s files with \`git -C ${repo} show v${v.n}:<path>\``}.${p.godot !== undefined ? ` Play it with \`godot --path ${join(repo, godot)}\`.` : ''}`,
+        `- What it changed, against ${p.frozen ? 'the game it was frozen from' : 'its empty start'}: ${join(here, 'changes.diff')}.`,
+        `- Its builder's notes, with the shortcuts it took and what the human rejected: ${join(here, 'NOTES.md')}.`,
+        `- How it went, ask by ask: ${join(here, 'process.md')}.${has('room-chat.md') ? ` The room's chat and board: ${join(here, 'room-chat.md')}, ${join(here, 'room-board.md')}.` : ''}`,
+        ...(Object.keys(values).length ? [`- The values the human kept, to match exactly (${join(here, 'values.json')}): ${Object.entries(values).map(([k, x]) => `${k} = ${x}`).join(', ')}.`] : []),
+        ...(p.frozen
+          ? [
+              `- It was frozen from ${p.frozen.source}${p.frozen.commit ? ` at ${p.frozen.commit.slice(0, 7)}${p.frozen.uncommitted ? ', plus changes not committed there' : ''}` : ''} on ${p.frozen.at.slice(0, 10)}.${moved ? ` The project has moved on ${moved.commits} commit${moved.commits === 1 ? '' : 's'} since${moved.files.length ? `, changing ${moved.files.length} file${moved.files.length === 1 ? '' : 's'}${moved.files.length <= 30 ? `: ${moved.files.join(', ')}` : ''}` : ''}.` : ''} Fit the code as it is now, not the frozen copy.`,
+            ]
+          : []),
+        'Read these before you plan.',
+      ].filter(Boolean).join('\n');
+    };
+    return { id, version: v.n, dir, stage, background };
+  }
+
+  /** Every prototype of a project, with what each takes on disk. */
+  prototypesList(projectRef?: string): (Prototype & { dir: string; bytes: number; roomOpen: boolean; scene?: string })[] {
+    const project = this.project(projectRef);
+    return listPrototypes(prototypesRoot(this.home, project.id)).map(({ dir, p }) => ({
+      ...p, dir, bytes: folderBytes(dir), roomOpen: !!p.room && this.goals.get(p.room)?.status === 'running' && !!this.goals.get(p.room)?.room,
+    }));
+  }
+
+  /** Deletes a prototype for good. Goals built from it keep what was copied to them. */
+  prototypeDelete(projectRef: string | undefined, id: string): string {
+    const project = this.project(projectRef);
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) throw new Error(`There's no prototype called ${id}.`);
+    const dir = this.prototypeFolder(project, id);
+    const p = loadPrototype(dir);
+    if (!p) throw new Error(`There's no prototype called ${id}.`);
+    const room = p.room ? this.goals.get(p.room) : undefined;
+    if (room?.room && room.status !== 'ended') throw new Error(`${id} is in room ${room.id}, still open: close the room first.`);
+    rmSync(dir, { recursive: true, force: true });
+    return `Deleted the prototype ${id}.`;
+  }
+
+  /** The `prototype` tool: the room's lead starts, forks and merges prototypes. */
+  prototypeTool(rec: AgentRec, a: Record<string, unknown>): string {
+    const g = this.goals.get(rec.goal);
+    if (!g?.room) return 'Prototypes are made in brainstorm rooms.';
+    if (!rec.isLead) return `Only ${g.lead} starts prototypes: say in your answer what's worth trying.`;
+    const text = (k: string) => (typeof a[k] === 'string' ? (a[k] as string) : undefined);
+    try {
+      switch (text('action')) {
+        case 'start': {
+          const ideas = Array.isArray(a.ideas) ? (a.ideas as { title?: unknown; ask?: unknown; card?: unknown }[]).map(i => ({ title: String(i?.title ?? ''), ask: typeof i?.ask === 'string' ? i.ask : undefined, card: typeof i?.card === 'string' ? i.card : undefined })) : [];
+          const from = text('from');
+          if (from !== 'game' && from !== 'small') return 'Say where it starts from: "from": "game" (a frozen copy of the game) or "small" (a little project of its own).';
+          return this.roomPrototypes(g.id, { ideas, from, source: text('source'), by: rec.name });
+        }
+        case 'fork':
+          return this.roomPrototypeFork(g.id, { id: text('id') ?? '', version: typeof a.version === 'number' ? a.version : undefined, title: text('title') ?? '', ask: text('ask'), by: rec.name });
+        case 'merge':
+          return this.roomPrototypeMerge(g.id, { from: prototypeRefs(a.ids), title: text('title') ?? '', ask: text('ask'), by: rec.name });
+        default:
+          return 'Say what to do: "action": "start", "fork" or "merge".';
+      }
+    } catch (e) {
+      return (e as Error).message;
+    }
+  }
+
   /** Posts to the chat (and its file). Returns the message's id. */
   private say(g: GoalRec, d: { from: string; to: string[]; text: string; kind: string; [k: string]: unknown }): string {
     const id = randomUUID().slice(0, 8);
@@ -4227,6 +5061,12 @@ export class Daemon {
     const askedBy = from === 'human' ? 'human' : g.lead;
     const existing = g.agents.get(lens.name!);
     if (existing && FINISHED.includes(existing.state)) return `${lens.name} has ${existing.state}. It can be respawned from its panel; ask another maker meanwhile.`;
+    const place = lens.prototype ? this.prototypePlace(g, lens.prototype) : undefined;
+    if (place && 'error' in place) {
+      if (from === 'human') throw new Error(place.error);
+      return place.error;
+    }
+    if (place) logProcess(dirname(place.cwd), `${from === 'human' ? 'The human' : from} asked`, shown);
     this.say(g, { from, to: [lens.name!], text: shown, kind: 'dispatch' });
     const after = from === 'human' ? 'Its answer shows in the chat.' : 'Its answer reaches you as a message: end your turn meanwhile.';
     if (existing) {
@@ -4237,7 +5077,7 @@ export class Daemon {
     }
     const role = this.lensRole(lens, g.project.config);
     if (!role) return `${lens.name}'s role, ${lens.role}, isn't in the configuration any more.`;
-    const r = this.spawnAgent(g.id, { role: role.name, roleDef: role, brief: ask, parent: g.lead, name: lens.name, stance: lens.stance, responsibility: responsibilityOf(lens), askedBy });
+    const r = this.spawnAgent(g.id, { role: role.name, roleDef: role, brief: ask, parent: g.lead, name: lens.name, stance: lens.stance, responsibility: responsibilityOf(lens), askedBy, ...(place ? { prototype: place } : {}) });
     if (!r.ok) {
       this.roomNote(g, `${lens.name} couldn't start: ${r.error}`);
       return `${lens.name} couldn't start: ${r.error}`;
@@ -4254,7 +5094,7 @@ export class Daemon {
       if (lens.off) throw new Error(`${lens.name} is put away: bring it back first.`);
       return lens;
     }
-    const lens = lenses.find(l => !l.off && makesOf(l) === makes);
+    const lens = lenses.find(l => !l.off && !l.prototype && makesOf(l) === makes);
     if (!lens) throw new Error(`No maker here makes ${makes} cards: add one (+ Maker) and try again.`);
     return lens;
   }
@@ -4382,6 +5222,7 @@ export class Daemon {
       this.canvasChanged(g);
     }
     this.say(g, { from: rec.name, to: [toHuman ? 'human' : g.lead], text: note, kind: how === 'ended' || how === 'crashed' ? 'note' : 'lens', ...(stopped ? { stopped: true } : {}) });
+    if (rec.prototype && (how === 'done' || how === 'idle')) this.prototypeAnswered(g, rec.prototype, note, stopped);
     if (toHuman) this.tellLead(g, `[Room] ${rec.name} answered the human${stopped ? ' (stopped by them)' : ''}: ${note.replace(/\s+/g, ' ').slice(0, 400)}`);
     return toHuman;
   }
@@ -4492,6 +5333,94 @@ export class Daemon {
   }
 
   /**
+   * Opens a room's Godot demo in a window, on the machine the daemon runs on: imported first when
+   * anything in it changed, since a project Godot hasn't imported doesn't run properly. A second
+   * press restarts it. How it goes shows as room.godot events.
+   */
+  roomGodot(goalId: string, path: string): string {
+    if (!/^[0-9a-f-]+$/i.test(goalId)) throw new Error(`There's no room ${goalId}.`);
+    const dir = this.goals.get(goalId)?.sharedDir ?? join(this.home, 'goals', goalId, 'shared');
+    const file = sharedPath(dir, path);
+    if (!file || !isGodotDemo(file) || file.split('/')[0] === HISTORY) throw new Error(`${path} isn't a Godot demo in the room's folder.`);
+    const project = dirname(join(dir, file));
+    if (!existsSync(join(project, 'project.godot'))) throw new Error(`There's no ${file} in the room's folder.`);
+    return this.godotStart(goalId, file, project);
+  }
+
+  private godotStart(goalId: string, file: string, project: string, scene?: string): string {
+    this.roomGodotStop(goalId, file);
+    const run: GodotRun = { goal: goalId, file, errors: [] };
+    this.godotRuns.set(`${goalId}:${file}`, run);
+    const host = hostname();
+    this.godotPlay(run, project, host, scene).catch(e => {
+      if (run.stopped) return;
+      this.godotRuns.delete(`${goalId}:${file}`);
+      run.stopped = true;
+      this.emit({ goal: goalId, type: 'room.godot', data: { file, state: 'stopped', host, errors: run.errors, problem: String((e as Error).message) } });
+    });
+    return host;
+  }
+
+  /** Closes a room's running Godot demo. Saying so again is harmless: it clears a run a crash left marked as running. */
+  roomGodotStop(goalId: string, file: string): void {
+    const run = this.godotRuns.get(`${goalId}:${file}`);
+    if (!run) return;
+    run.stopped = true;
+    run.proc?.kill();
+    this.godotRuns.delete(`${goalId}:${file}`);
+    this.emit({ goal: goalId, type: 'room.godot', data: { file, state: 'stopped', errors: run.errors } });
+  }
+
+  private async godotPlay(run: GodotRun, project: string, host: string, scene?: string): Promise<void> {
+    const say = (state: string, more: Record<string, unknown> = {}) => {
+      if (!run.stopped) this.emit({ goal: run.goal, type: 'room.godot', data: { file: run.file, state, host, errors: run.errors, ...more } });
+    };
+    const over = (more: Record<string, unknown> = {}) => {
+      if (run.stopped) return;
+      say('stopped', more);
+      run.stopped = true;
+      this.godotRuns.delete(`${run.goal}:${run.file}`);
+    };
+    const bin = process.env.MH_GODOT || 'godot';
+    const missing = `Godot isn't installed where the daemon can run it (it tried "${bin}" on ${host}). Set MH_GODOT to the program's path and restart the daemon.`;
+    const exec = (args: string[], state: string) =>
+      new Promise<{ code: number | null; tail: string; missing?: boolean }>(resolve => {
+        let tail = '';
+        let partial = '';
+        const p = spawn(bin, args, { cwd: project, stdio: ['ignore', 'pipe', 'pipe'] });
+        run.proc = p;
+        const hear = (chunk: Buffer) => {
+          tail = (tail + chunk.toString()).slice(-2000);
+          const lines = partial + chunk.toString();
+          const cut = lines.lastIndexOf('\n') + 1;
+          partial = lines.slice(cut);
+          // A broken game can say the same thing every frame: each once, and only so many.
+          const news = [...new Set(godotErrors(lines.slice(0, cut)))].filter(e => !run.errors.includes(e)).slice(0, GODOT_MAX_ERRORS - run.errors.length);
+          if (news.length) {
+            run.errors.push(...news);
+            say(state);
+          }
+        };
+        p.stdout?.on('data', hear);
+        p.stderr?.on('data', hear);
+        p.on('error', e => resolve({ code: null, tail: e.message, missing: (e as NodeJS.ErrnoException).code === 'ENOENT' }));
+        p.on('close', code => resolve({ code, tail: tail.trim().split('\n').slice(-5).join('\n') }));
+      });
+    const marker = join(project, GODOT_CACHE, GODOT_IMPORTED);
+    if (godotNeedsImport(project, marker)) {
+      say('importing');
+      const r = await exec(['--headless', '--path', project, '--import'], 'importing');
+      if (r.missing) return over({ problem: missing });
+      if (run.stopped) return;
+      if (existsSync(join(project, GODOT_CACHE))) writeFileSync(marker, '');
+    }
+    say('running');
+    const r = await exec(['--path', project, ...(scene ? [scene] : [])], 'running');
+    if (r.missing) return over({ problem: missing });
+    over(r.code === 0 ? {} : { problem: `Godot exited with ${r.code ?? 'a crash'}${r.tail ? `:\n${r.tail}` : ''}` });
+  }
+
+  /**
    * Keeps a file the human is attaching to a message, in the shared folder of the goal it's for
    * (or the assistant's). A room's go under room/, which a goal started from it carries along.
    */
@@ -4563,14 +5492,14 @@ export class Daemon {
     const out: ReturnType<Daemon['recover']> = [];
     for (const start of this.store.ofType('goal.started')) {
       if (this.goals.has(start.goal)) continue;
-      // A room is one sitting: after a restart it's over (start a new room from it).
-      if (start.data.kind === 'room') {
-        this.endLeftRoom(start.goal);
-        continue;
-      }
       const r = replayGoal(this.store.since(start.goal));
       if (!r || goalOver(r)) continue;
       const missing = [...new Set([...r.agents.values()].filter(a => !FINISHED.includes(a.state) && !this.adapters[a.harness]).map(a => a.harness))];
+      // A room stays open until it's closed; one that can't come back ends, its board and prototypes kept.
+      if (r.kind === 'room' && (missing.length || !existsSync(r.dir))) {
+        this.endLeftRoom(start.goal);
+        continue;
+      }
       if (missing.length) {
         out.push({ goal: r.id, request: r.request, resumed: [], later: [], skipped: `this daemon can't run ${missing.join(', ')}` });
         continue;
@@ -4589,7 +5518,7 @@ export class Daemon {
     return out;
   }
 
-  /** A room the last daemon left open ends here, and its worktree and merged branch go as when the human ends one. */
+  /** A room the last daemon left open that can't come back ends here, and its worktree and merged branch go as when the human ends one. */
   private endLeftRoom(id: string): void {
     const r = replayGoal(this.store.since(id));
     if (!r || r.ended) return;
@@ -4605,7 +5534,8 @@ export class Daemon {
     let resolveLeadDone!: (note: string) => void;
     const leadDone = new Promise<string>(res => (resolveLeadDone = res));
     const g: GoalRec = {
-      id: r.id, request: r.request, project, dir: project.dir, lead: r.lead, createdAt: r.createdAt, sharedDir: r.sharedDir,
+      id: r.id, ...(r.kind === 'room' ? { kind: 'room' as const, room: this.restoreRoom(r) } : {}), request: r.request, project, dir: project.dir, lead: r.lead, createdAt: r.createdAt, sharedDir: r.sharedDir,
+      ...this.restoredPrototypeFrom(r.id),
       refs: r.refs, seenOn: r.seenOn, workflow: r.workflow, status: 'running',
       chained: [...new Set(this.store.ofType('workflow.read').filter(e => e.goal === r.id).map(e => String(e.data.workflow)))], agents: new Map(), counters: r.counters,
       conflicts: r.conflicts, notes: r.notes, shared: new SharedFolder(r.sharedDir), sharedTouches: [], leadDone, resolveLeadDone,
@@ -4624,6 +5554,11 @@ export class Daemon {
     }
     this.goals.set(g.id, g);
     for (const a of r.agents.values()) g.agents.set(a.name, this.restoreAgent(g, a));
+    if (g.room) {
+      // Whatever it had open closed with the last daemon.
+      const runs = new Map(this.store.since(g.id).filter(e => e.type === 'room.godot').map(e => [String(e.data.file), String(e.data.state)]));
+      for (const [file, state] of runs) if (state !== 'stopped') this.emit({ goal: g.id, type: 'room.godot', data: { file, state: 'stopped', errors: [] } });
+    }
 
     for (const i of r.inbox) {
       // The session that asked is gone; if the agent still needs it, it asks again.
@@ -4648,8 +5583,29 @@ export class Daemon {
     return { resumed, later };
   }
 
+  /** A room's makers and board, as the log last had them. */
+  private restoreRoom(r: GoalReplay): RoomState {
+    const events = this.store.since(r.id);
+    const last = (type: string) => events.filter(e => e.type === type).at(-1)?.data;
+    const canvas = last('room.canvas') as unknown as Partial<Canvas> | undefined;
+    const c: Canvas = { cards: canvas?.cards ?? [], links: canvas?.links ?? [], frames: canvas?.frames ?? [], seq: 0 };
+    c.seq = Math.max(0, ...[...c.cards, ...c.frames].map(x => Number(/\d+$/.exec(x.id)?.[0]) || 0));
+    const lenses = ((last('room.lenses')?.lenses ?? []) as Lens[]).map(({ role, name, on, responsibility, stance, off, prototype }) => ({
+      ...(role ? { role } : {}), name, ...(on ? { on } : {}), ...(responsibility ? { responsibility } : {}), ...(stance ? { stance } : {}), ...(off ? { off } : {}), ...(prototype ? { prototype } : {}),
+    }));
+    return { topic: r.request, lenses, canvas: c };
+  }
+
+  /** The prototype a goal was built from, as it started. */
+  private restoredPrototypeFrom(id: string): { prototypeFrom?: GoalRec['prototypeFrom'] } {
+    const from = this.store.since(id).find(e => e.type === 'goal.started')?.data.prototype as GoalRec['prototypeFrom'];
+    return from ? { prototypeFrom: from } : {};
+  }
+
   private restoreAgent(g: GoalRec, a: AgentReplay): AgentRec {
-    const role: Role = g.project.config.roles.get(a.role) ?? {
+    const lens = g.room?.lenses.find(l => l.name === a.name);
+    const lensRole = lens ? this.lensRole(lens, g.project.config) : undefined;
+    const role: Role = lensRole ?? g.project.config.roles.get(a.role) ?? {
       name: a.role, harness: a.harness, model: a.model, fallback: [], goodAt: '', instructions: '', helper: a.quick,
       allow: [], autoApprove: 'read-only', mcp: [], worktree: false, file: '(no longer in the config)',
     };
@@ -4666,11 +5622,12 @@ export class Daemon {
     const rec: AgentRec = {
       goal: g.id, name: a.name, role, harness: a.harness, model: a.model, ...(a.effort ? { effort: a.effort } : {}), parent: a.parent, brief: a.brief,
       quick: a.quick, isLead: a.name === g.lead, cwd: a.cwd, worktree, state: a.state, status: a.status,
+      ...(lens?.prototype ? { prototype: lens.prototype } : {}), ...(a.responsibility ? { responsibility: a.responsibility } : {}), ...(a.stance ? { stance: a.stance } : {}), ...(a.askedBy ? { askedBy: a.askedBy } : {}),
       cost: a.cost, costBefore: a.costBefore, costSource: a.costSource, tokens: a.tokens, tokensBefore: a.tokensBefore, costSplit: a.costSplit, splitBefore: a.splitBefore,
       lastCallAt: a.lastCallAt, cacheMinutes: a.cacheMinutes, contextPct: a.contextPct, lastText: a.lastText,
       adapter: this.adapters[a.harness], resumeId: a.nativeSession, gen: 0, token, systemPrompt: '', doneNote: a.doneNote,
       inbox: [], waiters: [], doneWaiters: [], pendingApprovals: 0, fileNotes: new Map(), toolsRunning: 0, lastToolEnd: 0,
-      progressAt: Date.now(), rules: new RuleState(), ruleNotes: [],
+      progressAt: Date.now(), rules: new RuleState(), ruleNotes: [], tools: a.tools ?? [], toolsUsed: new Set(a.toolsUsed ?? []),
       ...(a.home && !FINISHED.includes(a.state) ? { home: a.home } : {}),
     };
     rec.systemPrompt = this.buildPrompt(g, rec, g.workflow, a.startedFrom ?? 'its start point');
@@ -4870,6 +5827,7 @@ export class Daemon {
       const gg = live?.git ?? this.pastGoalGit(id);
       if (gg) removeAuthors(gg.commonDir, id);
       live?.authorsWatch?.close();
+      for (const r of [...this.godotRuns.values()]) if (r.goal === id) this.roomGodotStop(id, r.file);
       this.store.deleteGoal(id);
       rmSync(dir, { recursive: true, force: true });
       out.deleted.push(id);
@@ -5107,7 +6065,7 @@ export class Daemon {
       for (const e of entries) {
         const full = join(d, e.name);
         if (e.isDirectory()) {
-          if (e.name !== HISTORY) walk(full);
+          if (e.name !== HISTORY && e.name !== GODOT_CACHE) walk(full);
         } else if (/\.(md|txt|json|ya?ml|csv)$/i.test(e.name)) {
           const st = statSync(full);
           out.push({ path: relative(dir, full).split(sep).join('/'), size: st.size, at: st.mtime.toISOString() });
@@ -5170,7 +6128,14 @@ export class Daemon {
         const request = s('request');
         if (!request) throw new Error('goal.start needs a request.');
         const from = s('from') ? { goal: s('from')!, files: Array.isArray(b.files) ? b.files.map(String) : undefined } : undefined;
-        const goal = this.startGoal({ request, project: s('project'), lead: s('lead'), workflow: s('workflow') ?? s('playbook'), fromRoom: s('fromRoom'), from, attach: startFilesOf(b.attach) });
+        const handoff = s('prototype') ? await this.prototypeHandoff(this.project(s('project')), s('prototype')!, typeof b.version === 'number' ? b.version : undefined) : undefined;
+        let goal: string;
+        try {
+          goal = this.startGoal({ request, project: s('project'), lead: s('lead'), workflow: s('workflow') ?? s('playbook'), fromRoom: s('fromRoom'), from, attach: startFilesOf(b.attach), prototype: handoff });
+        } catch (e) {
+          if (handoff) rmSync(handoff.stage, { recursive: true, force: true });
+          throw e;
+        }
         return { goal, notice: this.goalNotice(this.goals.get(goal)!) ?? null };
       }
       case 'room.start': {
@@ -5221,6 +6186,69 @@ export class Daemon {
         const make = s('make');
         if (!cards.length || !make) throw new Error('room.mix needs "cards" (ids, or {id, take}) and "make" (image, demo, text, ideas or source).');
         return { result: this.roomMix(this.roomId(s('goal')), { cards, make, count: Number(b.count) || 1, note: s('note'), maker: s('maker') }) };
+      }
+      case 'room.godot': {
+        const goal = s('goal'), file = s('file');
+        if (!goal || !file) throw new Error('room.godot needs "goal" and "file".');
+        if (b.stop) {
+          this.roomGodotStop(goal, file);
+          return { result: 'Closed it.' };
+        }
+        return { result: `Opening it on ${this.roomGodot(goal, file)}.` };
+      }
+      case 'room.prototype': {
+        const goal = this.roomId(s('goal'));
+        const ideas = Array.isArray(b.ideas) ? (b.ideas as { title?: unknown; ask?: unknown; card?: unknown }[]).map(i => ({ title: String(i?.title ?? ''), ask: typeof i?.ask === 'string' ? i.ask : undefined, card: typeof i?.card === 'string' ? i.card : undefined })) : [];
+        const from = s('from');
+        if (from !== 'game' && from !== 'small') throw new Error('room.prototype needs "from": game or small.');
+        return { result: this.roomPrototypes(goal, { ideas, from, source: s('source'), maker: s('maker'), by: 'human' }) };
+      }
+      case 'room.prototypeFork': {
+        return { result: this.roomPrototypeFork(this.roomId(s('goal')), { id: s('id') ?? '', version: typeof b.version === 'number' ? b.version : undefined, title: s('title') ?? '', ask: s('ask'), maker: s('maker'), by: 'human' }) };
+      }
+      case 'room.prototypeMerge': {
+        return { result: this.roomPrototypeMerge(this.roomId(s('goal')), { from: prototypeRefs(b.from), title: s('title') ?? '', ask: s('ask'), maker: s('maker'), by: 'human' }) };
+      }
+      case 'room.prototypeMergePreview': {
+        return { ...(await this.prototypeMergePreview(this.roomId(s('goal')), prototypeRefs(b.from))) };
+      }
+      case 'room.prototypeRestore': {
+        if (typeof b.version !== 'number') throw new Error('room.prototypeRestore needs "version".');
+        return { result: this.roomPrototypeRestore(this.roomId(s('goal')), s('id') ?? '', b.version) };
+      }
+      case 'room.prototypeVerdict': {
+        return { result: this.roomPrototypeVerdict(this.roomId(s('goal')), s('id') ?? '', { kind: s('kind'), why: s('why'), version: typeof b.version === 'number' ? b.version : undefined }) };
+      }
+      case 'room.prototypeRerun': {
+        const g = this.goals.get(this.roomId(s('goal')))!;
+        const { dir, p } = this.prototypeOf(g, s('id') ?? '');
+        p.rerun = b.rerun !== false;
+        savePrototype(dir, p);
+        this.emitPrototypes(g);
+        return {};
+      }
+      case 'room.prototypeRun': {
+        const goal = this.roomId(s('goal')), id = s('id') ?? '';
+        if (b.stop) {
+          this.roomGodotStop(goal, prototypeFile(id));
+          return { result: 'Closed it.' };
+        }
+        return { result: `Opening it on ${this.prototypeRun(goal, id)}.` };
+      }
+      case 'room.checkouts': {
+        return { checkouts: await checkouts(this.goals.get(this.roomId(s('goal')))!.dir) };
+      }
+      case 'prototype.list': {
+        return { prototypes: this.prototypesList(s('project')) };
+      }
+      case 'prototype.notes': {
+        const dir = this.prototypeFolder(this.project(s('project')), s('id') ?? '');
+        const p = loadPrototype(dir);
+        if (!p) throw new Error(`There's no prototype called ${s('id')}.`);
+        return { notes: (await notesAt(prototypeRepo(dir), latest(p).sha, p.godot ?? '')) ?? '', process: existsSync(processFile(dir)) ? readFileSync(processFile(dir), 'utf8') : '' };
+      }
+      case 'prototype.delete': {
+        return { result: this.prototypeDelete(s('project'), s('id') ?? '') };
       }
       case 'room.end': {
         const id = this.roomId(s('goal'));
@@ -5410,6 +6438,17 @@ export class Daemon {
         const parts = [`Imported ${r.imported.length} ${r.imported.length === 1 ? 'item' : 'items'}.`, r.unfilled.length ? `Still to fill in on Tools & skills: ${r.unfilled.join(', ')}.` : ''];
         return { ...r, result: parts.filter(Boolean).join(' '), config: this.configView(b) };
       }
+      case 'tool.elevate': {
+        // A project's tool moves to the personal library (design §24): only the human does this.
+        const { scopes, config, project } = this.setupOf(b);
+        const personal = scopes.find(x => x.scope === 'personal');
+        if (!project || !personal) throw new Error('Elevating moves a project’s tool to your personal library: open a project that has one.');
+        const tool = [...config.skills.values()].find(x => x.tool && x.name === s('name'));
+        if (!tool || tool.source !== 'repo') throw new Error(`There's no tool called ${s('name')} in this project${tool ? ': it’s in your personal library already' : ''}.`);
+        const r = elevateTool({ from: tool.dir, personalTools: join(personal.dir, 'tools'), repo: project.dir });
+        this.reloadConfig();
+        return { result: `Moved ${tool.name} to your personal library (${r.to}).${r.committed ? ` The project's copy is removed in commit ${r.committed}.` : ''}`, config: this.configView(b) };
+      }
       case 'settings.save': {
         const scope = this.setupOf(b).scopes.find(x => x.scope === b.scope);
         if (!scope) throw new Error(`There's no ${String(b.scope)} config folder here${b.scope === 'repo' ? ': open a project first' : ''}.`);
@@ -5526,7 +6565,7 @@ export class Daemon {
         return { ...(await this.harnessModels(harness, b.refresh === true)) };
       }
       default:
-        throw new Error(`Unknown command "${String(b.cmd)}". Commands: goal.start, goal.pause, goal.resume, goal.end, goal.clean, goal.delete, goal.procs, goal.sizes, goal.open_folder, agent.message, agent.spawn, agent.pause, agent.resume, agent.stop, agent.open_native, inbox.resolve, harness.test, harness.check, harness.models, limits.check, config.get, project.open, project.create, project.clone, project.forget, project.list, settings.save, role.builtin, role.update, assistant.ask, assistant.reset, assistant.state, assistant.set, assistant.make_default, assistant.options, assistant.apply, assistant.dismiss, role.save, role.delete, workflow.save, workflow.delete, rule.save, rule.delete, guide.save, mcp.save, folder.save, folder.delete, share.export, share.review, share.import.`);
+        throw new Error(`Unknown command "${String(b.cmd)}". Commands: goal.start, room.prototype, room.prototypeFork, room.prototypeMerge, room.prototypeRun, prototype.list, prototype.delete, goal.pause, goal.resume, goal.end, goal.clean, goal.delete, goal.procs, goal.sizes, goal.open_folder, agent.message, agent.spawn, agent.pause, agent.resume, agent.stop, agent.open_native, inbox.resolve, harness.test, harness.check, harness.models, limits.check, config.get, project.open, project.create, project.clone, project.forget, project.list, settings.save, role.builtin, role.update, assistant.ask, assistant.reset, assistant.state, assistant.set, assistant.make_default, assistant.options, assistant.apply, assistant.dismiss, role.save, role.delete, workflow.save, workflow.delete, rule.save, rule.delete, guide.save, mcp.save, folder.save, folder.delete, share.export, share.review, share.import.`);
     }
   }
 
@@ -5587,10 +6626,27 @@ export class Daemon {
     };
     const casts = [...config.casts.values()].map(c => ({ name: c.name, goodAt: c.goodAt, participants: c.participants }));
     const responsibilities = RESPONSIBILITIES.map(r => ({ name: r.name, text: r.text, roles: r.roles, makes: r.makes }));
+    const view = configView(scopes);
+    const usage = this.toolUsage();
+    for (const s of view.skills) if (s.tool && usage.has(s.name)) s.usage = usage.get(s.name);
     return {
-      ...configView(scopes), harnesses, settings, casts, responsibilities, override: this.harnessOverride ?? null,
+      ...view, harnesses, settings, casts, responsibilities, override: this.harnessOverride ?? null,
       project: project ? { id: project.id, dir: project.dir, name: project.name } : null,
     };
+  }
+
+  /** How many agents have read each tool, across every goal, and when one last did (design §24). */
+  private toolUsage(): Map<string, { agents: number; last: string }> {
+    const by = new Map<string, { who: Set<string>; last: string }>();
+    for (const e of this.store.ofType('skill.read')) {
+      if (e.data.tool !== true) continue;
+      const name = String(e.data.skill);
+      const u = by.get(name) ?? { who: new Set(), last: '' };
+      u.who.add(`${e.goal}/${e.agent ?? ''}`);
+      u.last = e.ts;
+      by.set(name, u);
+    }
+    return new Map([...by].map(([k, u]) => [k, { agents: u.who.size, last: u.last }]));
   }
 
   /** The models a harness offers: those its profile knows, plus what its CLI lists (asked once every ten minutes). */
@@ -5909,6 +6965,8 @@ export class Daemon {
       clearTimeout(g.landing?.timer);
     }
     this.closing = true;
+    for (const r of [...this.godotRuns.values()]) this.roomGodotStop(r.goal, r.file);
+    await this.prototypesIdle();
     await this.designIdle();
     const stopping: Promise<unknown>[] = [this.assistant.stop()];
     for (const g of this.goals.values()) {

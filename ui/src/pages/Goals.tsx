@@ -3,6 +3,8 @@ import { api } from '../api.ts';
 import { ago, bytes, firstLine, money } from '../format.ts';
 import type { ConfigView, GoalSummary } from '../types.ts';
 import { useConfirm } from '../components/common.tsx';
+import { PrototypesList } from '../components/Prototypes.tsx';
+import type { ContinueFrom } from '../components/Dialogs.tsx';
 
 interface Props {
   goals: GoalSummary[];
@@ -17,6 +19,8 @@ interface Props {
   onOpen: (goal: string, tab?: 'story' | 'files') => void;
   onCommand: (b: Record<string, unknown>) => Promise<Record<string, unknown> | undefined>;
   onChanged: () => void;
+  /** A new goal from a prototype. */
+  onContinue?: (f: ContinueFrom) => void;
 }
 
 type Size = { id: string; bytes: number; known: boolean };
@@ -27,7 +31,7 @@ type Sort = 'newest' | 'oldest' | 'largest' | 'cost';
  * Every goal MetaHarness has, in any folder: open one, open its files, see what it keeps on
  * disk, and delete the ones you're done with (one or many at once).
  */
-export function Goals({ goals, kind, loaded, config, projectDir, onKind, onNew, onOpen, onCommand, onChanged }: Props) {
+export function Goals({ goals, kind, loaded, config, projectDir, onKind, onNew, onOpen, onCommand, onChanged, onContinue }: Props) {
   const noun = kind === 'room' ? 'room' : 'goal';
   const confirm = useConfirm();
   const [sizes, setSizes] = useState<Record<string, Size>>({});
@@ -240,6 +244,7 @@ export function Goals({ goals, kind, loaded, config, projectDir, onKind, onNew, 
           </div>
         </section>
       )}
+      {kind === 'room' && <PrototypesList project={config?.project?.id} onCommand={onCommand} onContinue={onContinue} onOpenRoom={id => onOpen(id)} />}
     </div>
   );
 }

@@ -28,6 +28,7 @@ const blank = (config?: ConfigView): RoleDef => ({
   permissionMode: '',
   allow: [],
   nativeSkills: false,
+  onDemand: false,
 });
 
 export function Roles({ config, selected, onSelect, onSave, onCommand }: SetupProps) {
@@ -339,6 +340,7 @@ function RoleForm({ config, draft, set, isNew, original, footer, exportButton }:
             <Section title="How it works">
               <Toggle checked={draft.helper} onChange={v => set('helper', v)} label="Quick helper" hint="Answers one question and hands the answer straight back (spawn with quick: true). Gets the short helper guidelines." />
               <Toggle checked={draft.worktree} onChange={v => set('worktree', v)} label="Its own worktree by default" hint="A git worktree and branch of its own, for work in parallel. Otherwise it works in your checkout with the team." />
+              <Toggle checked={!!draft.onDemand} onChange={v => set('onDemand', v)} label="Starts when messaged" hint="When a teammate sends to this role and nobody on the team has it, MetaHarness starts one with the message as its task, reporting to the lead (the toolsmith works this way). It always works in your checkout." />
               <Field label="Workflow it follows" hint="Goes into its prompt. A goal's lead gets the goal's workflow instead.">
                 <select value={draft.workflow} onChange={e => set('workflow', e.target.value)}>
                   <option value="">None</option>

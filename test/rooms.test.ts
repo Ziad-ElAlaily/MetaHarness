@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FakeAdapter, type FakeCtx } from '../src/adapters/fake.ts';
-import { applyCanvas, branchCards, canvasMarkdown, castText, demoKnobs, demoPage, lensName, makesOf, parseCanvasOps, parseCast, responsibilityOf, seedCanvas, type Canvas } from '../src/rooms.ts';
+import { applyCanvas, branchCards, canvasMarkdown, castText, demoKnobs, demoPage, godotErrors, isGodotDemo, lensName, makesOf, parseCanvasOps, parseCast, responsibilityOf, seedCanvas, type Canvas } from '../src/rooms.ts';
 import { git } from '../src/git.ts';
 import { agyToolRequest } from '../src/adapters/agy.ts';
 import type { MhEvent } from '../src/types.ts';
@@ -411,4 +411,101 @@ test('a room has nothing to dismiss: its makers stay for the next question', asy
   const out = await d.hub.call(room, d.goals.get(room)!.lead, 'dismiss', { name: 'all' });
   assert.match(out, /In a room, makers stay/);
   await d.close();
+});
+
+test('reads the errors out of what Godot prints', () => {
+  assert.ok(isGodotDemo('room/demos/jump/project.godot') && !isGodotDemo('room/demos/jump.html') && !isGodotDemo('room/demos/not-project.godot'));
+  assert.deepEqual(
+    godotErrors('Godot Engine v4\n\x1b[31mSCRIPT ERROR: Parse Error: oops\n          at: GDScript::reload (res://main.gd:4)\x1b[0m\nhello\nERROR: Failed to load.\n'),
+    ['SCRIPT ERROR: Parse Error: oops (at: GDScript::reload (res://main.gd:4))', 'ERROR: Failed to load.'],
+  );
+});
+
+test('a Godot demo opens from its card: imported when it changed, stopped by the human, and its cache left out', async () => {
+  // A stand-in for Godot: it logs how it was started, and the game runs until it's stopped.
+  const bin = mkdtempSync(join(tmpdir(), 'mh-godot-'));
+  const calls = join(bin, 'calls');
+  writeFileSync(join(bin, 'godot'), `#!/bin/sh\necho "$*" >> "${calls}"\ncase "$*" in *--import*) mkdir -p .godot; echo cached > .godot/cache.bin; exit 0;; esac\necho "SCRIPT ERROR: Parse Error: oops" >&2\ntrap 'exit 0' TERM\nwhile :; do sleep 0.05; done\n`);
+  chmodSync(join(bin, 'godot'), 0o755);
+  const was = process.env.MH_GODOT;
+  process.env.MH_GODOT = join(bin, 'godot');
+  const { d } = roomTeam();
+  let closed = false;
+  try {
+    const room = d.startRoom({ topic: 'Jump', lenses: [{ role: 'scout' }] });
+    const g = d.goals.get(room)!;
+    const project = join(g.sharedDir, 'room', 'demos', 'jump');
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, 'project.godot'), 'config_version=5\n');
+    const file = 'room/demos/jump/project.godot';
+    const running = (after: number) => next(d, room, e => e.seq > after && e.type === 'room.godot' && e.data.state === 'running', 'the game running');
+    const last = () => d.store.since(room).filter(e => e.type === 'room.godot').at(-1)!;
+
+    assert.throws(() => d.roomGodot(room, 'room/chat.md'), /isn't a Godot demo/);
+    assert.throws(() => d.roomGodot(room, '../../../etc/project.godot'), /isn't a Godot demo/);
+    assert.throws(() => d.roomGodot(room, 'room/demos/none/project.godot'), /There's no/);
+
+    d.roomGodot(room, file);
+    await running(0);
+    await until(() => (last().data.errors as string[]).length > 0, 'the error shown');
+    assert.deepEqual(last().data.errors, ['SCRIPT ERROR: Parse Error: oops']);
+    assert.match(readFileSync(calls, 'utf8'), new RegExp(`^--headless --path ${project} --import\\n--path ${project}\\n`));
+
+    // Nothing changed: no import this time. A second press restarts it.
+    const seq = last().seq;
+    d.roomGodot(room, file);
+    await running(seq);
+    assert.equal(readFileSync(calls, 'utf8').match(/--import/g)!.length, 1);
+
+    // Changed since: imported again.
+    d.roomGodotStop(room, file);
+    assert.equal(last().data.state, 'stopped');
+    const later = new Date(Date.now() + 5000);
+    utimesSync(join(project, 'project.godot'), later, later);
+    const seq2 = last().seq;
+    d.roomGodot(room, file);
+    await running(seq2);
+    assert.equal(readFileSync(calls, 'utf8').match(/--import/g)!.length, 2);
+
+    // Godot's cache isn't the room's: no versions of it, and it isn't copied along.
+    g.shared.scan();
+    assert.ok(statSync(join(project, '.godot', 'cache.bin')).isFile());
+    assert.ok(g.shared.files.has(file) && ![...g.shared.files.keys()].some(p => p.includes('/.godot/')));
+
+    // A new room from this one gets the whole project, without the cache.
+    writeFileSync(join(project, 'main.gd'), 'extends Node\n');
+    d.roomCanvas(room, [{ op: 'add', kind: 'demo', title: 'Jump', file }], 'human');
+    const copy = d.startRoom({ topic: 'More', from: room, lenses: [{ role: 'scout' }] });
+    const there = join(d.goals.get(copy)!.sharedDir, 'room', 'demos', 'jump');
+    assert.ok(existsSync(join(there, 'main.gd')) && !existsSync(join(there, '.godot')));
+
+    // Closing the daemon closes the windows.
+    const p = (d as unknown as { godotRuns: Map<string, { proc?: { exitCode: number | null; signalCode: unknown } }> }).godotRuns.get(`${room}:${file}`)!.proc!;
+    closed = true;
+    await d.close();
+    await until(() => p.exitCode !== null || p.signalCode !== null, 'the game closed');
+  } finally {
+    if (was === undefined) delete process.env.MH_GODOT;
+    else process.env.MH_GODOT = was;
+    if (!closed) await d.close();
+  }
+});
+
+test("says so when Godot can't be started", async () => {
+  const was = process.env.MH_GODOT;
+  process.env.MH_GODOT = join(tmpdir(), 'no-such-godot');
+  const { d } = roomTeam();
+  try {
+    const room = d.startRoom({ topic: 'Jump', lenses: [{ role: 'scout' }] });
+    const g = d.goals.get(room)!;
+    mkdirSync(join(g.sharedDir, 'room', 'demos', 'jump'), { recursive: true });
+    writeFileSync(join(g.sharedDir, 'room', 'demos', 'jump', 'project.godot'), '');
+    d.roomGodot(room, 'room/demos/jump/project.godot');
+    const e = await next(d, room, x => x.type === 'room.godot' && x.data.state === 'stopped', 'the run over');
+    assert.match(String(e.data.problem), /Godot isn't installed .*MH_GODOT/);
+  } finally {
+    if (was === undefined) delete process.env.MH_GODOT;
+    else process.env.MH_GODOT = was;
+    await d.close();
+  }
 });

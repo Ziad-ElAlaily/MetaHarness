@@ -63,6 +63,10 @@ export interface Settings {
   skills: Record<string, boolean>;
   /** Design snapshots (the Design view) when the goal starts and as work lands; false: none. */
   design: boolean;
+  /** Agents make and use tools (design §24); false: tools are hidden from agents and the toolsmith isn't started. */
+  agentTools: boolean;
+  /** The role that makes tools, which agentTools: false keeps from starting. */
+  toolsmith: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -81,6 +85,8 @@ export const DEFAULT_SETTINGS: Settings = {
   rules: {},
   skills: {},
   design: true,
+  agentTools: true,
+  toolsmith: 'toolsmith',
 };
 
 const FILE = 'settings.json';
@@ -127,6 +133,8 @@ function apply(s: Settings, raw: Record<string, unknown>): void {
   if (typeof raw.roomLead === 'string' && raw.roomLead.trim()) s.roomLead = raw.roomLead.trim();
   if (typeof raw.cacheReminders === 'boolean') s.cacheReminders = raw.cacheReminders;
   if (typeof raw.design === 'boolean') s.design = raw.design;
+  if (typeof raw.agentTools === 'boolean') s.agentTools = raw.agentTools;
+  if (typeof raw.toolsmith === 'string' && raw.toolsmith.trim()) s.toolsmith = raw.toolsmith.trim();
   for (const k of ['cacheRemindSec', 'cacheRemindMinTokens', 'defaultCacheMinutes', 'limitCheckMinutes', 'contextHandoffPct', 'stallMinutes'] as const) if (num(raw[k]) !== undefined) s[k] = num(raw[k])!;
   if (raw.models && typeof raw.models === 'object') {
     for (const [key, v] of Object.entries(raw.models)) s.models[key] = { ...s.models[key], ...readModel(v) };

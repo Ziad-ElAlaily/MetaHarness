@@ -55,6 +55,8 @@ export interface CostSplit {
 
 export interface Goal {
   id: string;
+  /** The project it belongs to, while it's loaded. */
+  project?: string;
   /** room: a brainstorm with a lead, makers and a board; its request is the topic. */
   kind: 'goal' | 'room';
   request: string;
@@ -184,6 +186,8 @@ export interface RoleDef {
   allow: string[];
   /** Keeps the harness's own skills instead of hiding them. */
   nativeSkills: boolean;
+  /** Started when a teammate messages the role and nobody on the team has it. */
+  onDemand?: boolean;
 }
 
 export interface WorkflowDef {
@@ -202,7 +206,7 @@ export interface WorkflowDef {
   body: string;
 }
 
-export type RuleWhen = 'start' | 'path' | 'new-file' | 'commit' | 'done' | 'away';
+export type RuleWhen = 'start' | 'path' | 'new-file' | 'commit' | 'done' | 'away' | 'prototype';
 export type ChangeKind = 'added' | 'modified' | 'deleted' | 'renamed';
 
 /** A note MetaHarness hands agents at a moment it can see (design §18). */
@@ -222,6 +226,8 @@ export interface RuleDef {
   include?: string;
   requires?: string;
   missing?: string;
+  /** Only while this setting is on, e.g. agentTools. */
+  setting?: string;
   changes: ChangeKind[];
   unlessChanged?: string;
   edited: boolean;
@@ -252,6 +258,21 @@ export interface SkillDef {
   carriedBy: string[];
   /** Rules that point at it. */
   pointedBy: string[];
+  /** A tool agents made (design §24): in a tools/ folder; every agent may read it. */
+  tool: boolean;
+  madeBy?: string;
+  askedBy?: string;
+  why?: string;
+  goal?: string;
+  /** Programs it runs, and those of them not installed on the daemon's machine. */
+  needs: string[];
+  missing: string[];
+  /** Tools or skills it calls. */
+  uses: string[];
+  /** A project's tool that replaces a personal one: whether they're the same. */
+  personalSame?: boolean;
+  /** Agents that have read it, across goals, and when one last did. */
+  usage?: { agents: number; last: string };
 }
 
 export interface GuideDef {
@@ -394,6 +415,8 @@ export interface Lens {
   stance?: string;
   /** Put away: nobody can send it. */
   off?: boolean;
+  /** The prototype it builds: it shows on the prototype's card, not with the makers. */
+  prototype?: string;
   /** As the room reports it: what it makes, and what its harness can do. */
   makes?: Output;
   web?: boolean;
@@ -414,7 +437,7 @@ export interface Cast {
   participants: Lens[];
 }
 
-export type CardKind = 'question' | 'idea' | 'finding' | 'risk' | 'decision' | 'source' | 'image' | 'demo' | 'text' | 'concept';
+export type CardKind = 'question' | 'idea' | 'finding' | 'risk' | 'decision' | 'source' | 'image' | 'demo' | 'text' | 'concept' | 'prototype';
 
 /** A card on a room's board (src/rooms.ts). */
 export interface CanvasCard {
@@ -440,6 +463,31 @@ export interface CanvasCard {
   notes?: { by: string; text: string }[];
   /** Rooms branched off from it. */
   branches?: string[];
+  /** The card is this prototype, however many versions it goes through. */
+  prototype?: string;
+}
+
+/** A playable idea from a room, kept outside the project (src/prototypes.ts). */
+export interface PrototypeInfo {
+  id: string;
+  title: string;
+  idea: string;
+  dir: string;
+  createdAt: string;
+  start:
+    | { kind: 'small' }
+    | { kind: 'game'; source: string; commit?: string; branch?: string; uncommitted: boolean }
+    | { kind: 'fork'; from: string; version: number }
+    | { kind: 'merge'; from: { id: string; version: number }[] };
+  versions: { n: number; sha: string; at: string; note: string }[];
+  godot?: string;
+  scene?: string;
+  kept: { version: number; values: Record<string, number>; at: string }[];
+  verdict?: { kind: 'keep' | 'park' | 'drop'; why?: string; version: number; at: string };
+  room?: string;
+  card?: string;
+  rerun: boolean;
+  conflicts?: string[];
 }
 
 /** A named group of cards on a room's board. */
@@ -540,6 +588,8 @@ export interface Settings {
   limitCheckMinutes: number;
   contextHandoffPct: number;
   stallMinutes: number;
+  /** Agents make and use tools (design §24). */
+  agentTools: boolean;
   models: Record<string, ModelSettings>;
   rules: Record<string, boolean>;
 }

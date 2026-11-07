@@ -111,27 +111,34 @@ test('a goal whose lead has finished is not picked up again', async () => {
   await d2.close();
 });
 
-test('a room left open when the daemon stopped ends at the next start', async () => {
+test('a room left open when the daemon stopped comes back; one that can\'t ends, once', async () => {
   const home = mkdtempSync(join(tmpdir(), 'mh-test-'));
   const repo = makeRepo();
   const config = mkdtempSync(join(tmpdir(), 'mh-config-'));
   mkdirSync(join(config, 'roles'));
   writeFileSync(join(config, 'roles', 'room-lead.md'), '---\nharness: fake\nmodel: m\ngood_at: x\n---\nx\n');
-  const daemon = () => new Daemon({ home, repo, configDirs: [config], adapters: { fake: new FakeAdapter({}) }, pollMs: 0, settings: { approvals: 'ask' } });
+  const daemon = (run = true) => new Daemon({ home, repo, configDirs: [config], adapters: run ? { fake: new FakeAdapter({}) } : {}, pollMs: 0, settings: { approvals: 'ask' } });
   const d1 = daemon();
   const room = d1.startRoom({ topic: 'Talk it over', lenses: [] });
   await d1.close();
   const d2 = daemon();
   try {
-    assert.deepEqual(d2.recover(), []);
-    assert.equal(d2.store.since(room).filter(e => e.type === 'goal.ended').length, 1);
+    assert.equal(d2.recover()[0]?.goal, room);
+    assert.equal(d2.goals.get(room)?.kind, 'room');
+    assert.equal(d2.goals.get(room)?.status, 'running');
+    assert.equal(d2.store.since(room).filter(e => e.type === 'goal.ended').length, 0);
   } finally {
     await d2.close();
   }
-  const d3 = daemon();
+  // Its harness doesn't run here any more.
+  const d3 = daemon(false);
   d3.recover();
-  assert.equal(d3.store.since(room).filter(e => e.type === 'goal.ended').length, 1, 'it ends once');
+  assert.equal(d3.store.since(room).filter(e => e.type === 'goal.ended').length, 1);
   await d3.close();
+  const d4 = daemon();
+  d4.recover();
+  assert.equal(d4.store.since(room).filter(e => e.type === 'goal.ended').length, 1, 'it ends once');
+  await d4.close();
 });
 
 test("commits in the human's checkout are named after the agent whose command made them", async () => {

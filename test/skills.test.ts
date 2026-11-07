@@ -70,7 +70,7 @@ const claimed = claimedSkills([{ skills: ['frontend'] }, { skills: ['release'] }
 test('skills: layers, overrides, switches, and which roles carry them', () => {
   const { repo, dirs } = setup();
   const layers = skillLayers(dirs, repo, false);
-  assert.deepEqual(layers.map(l => l.source), ['personal', '.claude', '.agents', 'repo']);
+  assert.deepEqual(layers.map(l => `${l.source}${l.tool ? ' tools' : ''}`), ['personal', 'personal tools', '.claude', '.agents', 'repo', 'repo tools']);
   const skills = loadSkills(layers, { release: false });
   assert.deepEqual([...skills.keys()].sort(), ['claude-only', 'frontend', 'notes', 'pdf', 'release']);
   assert.equal(skills.get('notes')!.source, 'repo', "the repository's own replaces the personal one");

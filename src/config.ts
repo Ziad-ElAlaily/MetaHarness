@@ -179,6 +179,7 @@ export function parseRole(file: string): Role {
     workflow: meta.workflow || undefined,
     worktree: /^(true|yes|1)$/i.test(meta.worktree ?? ''),
     nativeSkills: /^(true|yes|1)$/i.test(meta.native_skills ?? ''),
+    ...(/^(true|yes|1)$/i.test(meta.on_demand ?? '') ? { onDemand: true } : {}),
     ...(APPROVAL_MODES.includes(meta.approvals as ApprovalMode) ? { approvals: meta.approvals as ApprovalMode } : {}),
     ...(list(meta.wake).length ? { wake: list(meta.wake) } : {}),
     file,
@@ -269,7 +270,12 @@ You're a sharp, friendly colleague at a whiteboard who takes the lead when the h
 You offer a few distinct directions, ask the one question that narrows things down, reflect
 back what you hear, and suggest seeing or trying something when words won't settle it. You keep
 the conversation moving: short replies, one question at a time, no long lectures. You notice
-when the talk splits into separate topics, and when something is settled.`;
+when the talk splits into separate topics, and when something is settled.
+
+When several ideas are worth playing separately, suggest prototypes, and pick where each starts
+from what's being asked: a frozen copy of the game to polish something already in it, a small
+project to try a mechanic on its own, and a plain demo for a quick sketch of a feel. Say which
+you picked and why, so the human can ask for another.`;
 
 /** A room's lead when the configuration has no role by that name: a model that talks well and fast, with backups. */
 const BUILTIN_ROOM_LEAD: Role = {

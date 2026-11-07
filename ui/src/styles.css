@@ -568,6 +568,10 @@ textarea.instructions { font-family: var(--mono); font-size: 12.5px; line-height
 .toggle input:checked + .switch { background: var(--accent); }
 .toggle input:checked + .switch::after { transform: translateX(14px); }
 .toggle input:focus-visible + .switch { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mini-switch { flex: none; width: 24px; height: 14px; border-radius: 99px; background: var(--line-strong); position: relative; cursor: pointer; transition: background 0.15s; margin-left: 6px; order: 9; }
+.mini-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: #fff; transition: transform 0.15s; }
+.mini-switch.on { background: var(--accent); }
+.mini-switch.on::after { transform: translateX(10px); }
 .toggle-label { display: block; color: var(--text); font-weight: 560; }
 .toggle .hint { display: block; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 5px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--panel); align-items: center; }
@@ -578,6 +582,8 @@ textarea.instructions { font-family: var(--mono); font-size: 12.5px; line-height
 .chip button { border: 0; background: none; cursor: pointer; color: var(--text-3); padding: 0 3px; font-size: 14px; line-height: 1; }
 .chip button:hover { color: var(--crashed); }
 .chip.ro { padding-right: 8px; }
+.chip.missing { color: var(--crashed); border-color: color-mix(in srgb, var(--crashed) 40%, var(--line)); }
+.row-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
 .file-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 2px; align-content: start; }
 .segmented { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; background: var(--panel); }
 .segmented button { border: 0; background: none; padding: 5px 11px; cursor: pointer; font-size: 12.5px; color: var(--text-2); }
@@ -1415,6 +1421,7 @@ details.more { display: grid; gap: 6px; }
 .canvas-card.source { --kind: var(--series-2); }
 .canvas-card.image { --kind: var(--series-3); }
 .canvas-card.demo { --kind: var(--series-4); }
+.canvas-card.prototype, .board-panel.prototype { --kind: var(--series-4); }
 .canvas-card.text { --kind: var(--series-5); }
 .canvas-card.concept { --kind: var(--series-6); background: color-mix(in srgb, var(--series-6) 7%, var(--panel)); }
 .canvas-card.pending { border-style: dashed; }
@@ -1459,6 +1466,7 @@ details.more { display: grid; gap: 6px; }
 /* A demo, played in a sandbox, with its knobs. */
 .demo-player { display: grid; gap: 8px; }
 .demo-frame { width: 100%; height: 280px; border: 1px solid var(--line-strong); border-radius: 8px; background: #000; }
+.godot-log { margin: 0; padding: 6px 8px; max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11.5px; border: 1px solid var(--line-strong); border-radius: 8px; }
 .knobs { display: grid; gap: 4px; }
 .knob { display: grid; grid-template-columns: minmax(80px, 34%) 1fr auto; gap: 8px; align-items: center; font-size: 12.5px; }
 .knob-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1810,3 +1818,30 @@ input.cast-name { width: 160px; font-size: 12.5px; }
   .tab-strip { flex: 1 1 auto; width: auto; }
   .tab-views { margin: 0 12px 0 0; }
 }
+
+/* Prototypes on a room's board */
+.proto-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; }
+.proto-strip { display: inline-flex; gap: 3px; align-items: center; }
+.proto-dot { font-size: 11px; padding: 0 4px; border-radius: 5px; background: var(--panel-2); border: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+.proto-dot.kept { border-color: var(--kind); color: var(--kind); font-weight: 600; }
+.proto-tag { font-size: 11px; font-weight: 600; color: var(--kind); }
+.proto-body { display: grid; gap: 10px; }
+.proto-ask { display: grid; gap: 6px; }
+.proto-ask textarea, .proto-ask input, .proto-idea input, .proto-idea textarea, .proto-body > .panel-section > input { width: 100%; }
+.proto-versions { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.proto-versions li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 6px; font-size: 12.5px; }
+.proto-versions li:hover { background: var(--panel-2); }
+.proto-versions li.kept .proto-v { color: var(--kind); font-weight: 650; }
+.proto-note { flex: 1 1 140px; min-width: 0; color: var(--text-2); }
+.proto-v-actions { display: inline-flex; gap: 2px; }
+.proto-notes summary { cursor: pointer; }
+.proto-idea { display: grid; grid-template-columns: 1fr auto; gap: 4px 6px; }
+.proto-idea input, .proto-idea textarea { grid-column: 1; }
+.proto-idea .btn { grid-column: 2; grid-row: 1; }
+.proto-from { display: grid; gap: 6px; }
+.proto-preview { display: grid; gap: 4px; }
+.proto-list { margin-top: 28px; display: grid; gap: 6px; }
+.proto-list h2 { margin: 0; font-size: 15px; }
+.proto-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 12px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); }
+.proto-title { min-width: 0; }
+@media (max-width: 720px) { .proto-row { grid-template-columns: minmax(0, 1fr) auto; } }

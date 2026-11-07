@@ -525,6 +525,35 @@ Home, or a room's header): what to talk about, and the makers.
   prototyper ports its formulas and names the knobs after the real parameters. Tune until it
   feels right, then **Keep these values**: a decision card with the numbers, which a goal
   builds to (opening it plays the demo with those values).
+- **Godot demos:** in a Godot project (or when you ask), the prototyper makes a small Godot
+  project instead of a page, and its card has **▶ Run in Godot**. It opens a window on the
+  machine running MetaHarness, not on your phone if you're on one, and **■ Stop** closes it.
+  Script errors show on the card. The tuning sliders are inside the game; tell the room what
+  you want to keep. MetaHarness runs `godot` from the PATH: set `MH_GODOT` if yours is elsewhere.
+- **Prototypes** are for trying several ideas separately, usually when polishing a game. Pick the
+  idea cards and choose **▶ Prototype each…**, or **+ Prototype** (the lead can start them too, and
+  says why it chose what it did). Each gets its own builder and its own copy, kept by MetaHarness,
+  outside your project, so they all run at once without touching each other:
+  - **A copy of the game** is frozen as it stands, uncommitted work included, from your checkout
+    or any git worktree of it, and doesn't move after that. Ideas started together share one
+    freeze, so they merge cleanly. **A small project of its own** is quicker, for a mechanic away
+    from the game.
+  - Open its card: **▶ Run** opens the game in a window (and reopens it after each change, unless
+    you untick that), and you tell its builder what to change right there, without going through
+    the lead. Each answer is a new version: go **Back to this**, or **⑂ Fork** a variation from any
+    version.
+  - **F10 in the game** shows the sliders. **Keep these values** there puts them on the board as a
+    decision.
+  - **⚗ Merge…**, with two or more prototype cards picked, makes a new one with them all in it, to
+    play them together. It says first whether they merge cleanly; a builder settles conflicts.
+    Expect to tune again: independent ideas can still fight each other.
+  - **Verdict**: Keep, Park or Drop, and what it taught you. **→ Goal** starts a goal of its own that
+    builds it for production, whatever happens to the room. It can read and play that version, and
+    gets what it changed, its builder's notes and shortcuts, how it went and the values you kept.
+    Prototypes cut corners, so the goal reimplements; the rule that says so is
+    `prototype-handoff`, in Setup, for you to change.
+  - They stay until you delete them, even after the room closes: the **Rooms** list shows them with
+    what they take on disk. A new room from their cards takes them along.
 - **The concept card** is the idea as it stands, pillar by pillar (look, feel, mechanics,
   story…), each pointing at the cards it comes from. The lead keeps it as things settle. Only
   you decide: decision cards are what you agreed to.
@@ -536,7 +565,8 @@ Home, or a room's header): what to talk about, and the makers.
   generate images without asking in a room (you're watching; **■** stops one).
 - A room's tabs are **Room**, **Files** and **Costs**. Rooms open with the team and agent columns put away; click a name to slide its panel in, or
   bring the columns back with the toggles at the top right.
-- A room lasts one sitting: after a daemon restart, start a new room from it.
+- A room stays open until you close it: after a daemon restart it comes back, with its chat, board
+  and makers.
 
 ## 7. What agents can and can't do
 
@@ -731,10 +761,11 @@ restarting the daemon. The pages write the same files described below.
   ```
 
   More keys: `sections:` (a file whose path sections come along), `include:` (a file whose
-  text follows), `requires:` / `missing:` (only while a file exists, or doesn't), `changes:` and
-  `unless_changed:` for commits, `edited: true` for done. To turn a rule off, flip its switch
-  (that writes `"rules": {"map": false}` into `settings.json`), or add a file of the same name
-  with `off: true`.
+  text follows), `requires:` / `missing:` (only while a file exists, or doesn't), `setting:`
+  (only while a setting is on, e.g. `setting: agentTools`), `changes:` and `unless_changed:` for
+  commits, `edited: true` for done. To turn a rule off, flip its switch, on its row in the
+  Rules list or in its editor (that writes `"rules": {"map": false}` into `settings.json`), or
+  add a file of the same name with `off: true`.
 - **Skills** are guides for a kind of work with files to go with them: a folder with a
   `SKILL.md`, in the format Claude Code, Codex and Antigravity share. Rules are for moments
   MetaHarness can see (a path, a new file, a commit); skills are for needs only the agent
@@ -758,6 +789,22 @@ restarting the daemon. The pages write the same files described below.
   give a rule a skill to point at (`skill: pdf-forms`, with `when: path` and `paths: forms/**`):
   its note names the skill when they open a form. A rule that grows long is usually better as
   a skill.
+- **Tools agents make** are skills too, written by agents for their own work: a sound they
+  can't hear, a scene they can't see, a job they'd otherwise do by hand. An agent asks the
+  **toolsmith** for one (`send` to `toolsmith`); if the team has none, MetaHarness starts one
+  with that message as its task and tells the lead. The toolsmith writes the tool in
+  `.metaharness/tools/<name>/` (a `SKILL.md` saying how to run it, and its scripts) and commits
+  it, and every agent can read it from then on. A lead can hand teammates the tools they'll need
+  (`spawn` with `tools: ["sfx-layer"]`), and agents using a tool hear when the toolsmith
+  changes it. On **Tools & skills**, *Made by agents* lists them with who made each one, for
+  whom and why, what it needs (`mh doctor` checks those programs too) and how often it's read.
+  **Move to my library** puts one in `~/.metaharness/tools/` for every project. Exports carry
+  tools like skills. The role (`toolsmith`, Opus) and the rule that tells agents to ask
+  (`tools`) are both in the default pack: edit them or turn them off like any other. Any role
+  can start this way: turn on *Starts when messaged* (`on_demand: true`). If tools go wrong,
+  turn off *Tools agents make* in **Settings** (`"agentTools": false`): agents stop seeing
+  the library, no toolsmith starts, and the `tools` rule goes quiet. The tools stay where they
+  are for when you turn it back on.
 - **Personal skills stay out.** Skills you installed for yourself (in `~/.claude/skills`, your
   Codex skills, `~/.gemini/config/skills`) are hidden from agents, so every harness on a team
   has the same ones. So are each harness's own copies of the repository's skills, which come

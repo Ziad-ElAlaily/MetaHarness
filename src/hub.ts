@@ -4,8 +4,8 @@ import { skillList, skillPart, skillSummary } from './skills.ts';
 import { parseCanvasOps } from './rooms.ts';
 import type { AgentRec, Daemon, InboxEntry } from './daemon.ts';
 
-/** `canvas` is published only to agents in a brainstorm room, and `dismiss` only outside one. */
-export const TOOL_NAMES = ['team', 'spawn', 'respawn', 'dismiss', 'send', 'wait', 'status', 'done', 'workflow', 'skill', 'procs', 'canvas'] as const;
+/** `canvas` and `prototype` are published only to agents in a brainstorm room, and `dismiss` only outside one. */
+export const TOOL_NAMES = ['team', 'spawn', 'respawn', 'dismiss', 'send', 'wait', 'status', 'done', 'workflow', 'skill', 'procs', 'canvas', 'prototype'] as const;
 
 /** Descriptions the MCP layer will publish. Written for the agents that read them. */
 export const TOOL_DOCS: Record<(typeof TOOL_NAMES)[number], { description: string; params: Record<string, string> }> = {
@@ -19,6 +19,7 @@ export const TOOL_DOCS: Record<(typeof TOOL_NAMES)[number], { description: strin
       name: 'Optional name',
       worktree: "true to give them their own git worktree and branch, for code written in parallel with others. Default: they work in the shared folder, like everyone else",
       from: "Optional: a teammate (or branch) whose latest commit their own worktree starts from, e.g. the implementer whose code a reviewer checks. Implies worktree",
+      tools: 'Optional: tools from the library to put in their kit, by name, e.g. ["sfx-layer", "spectrogram"]. Their prompt spells these out; they can still read any other tool',
     },
   },
   respawn: {
@@ -66,13 +67,27 @@ export const TOOL_DOCS: Record<(typeof TOOL_NAMES)[number], { description: strin
     params: { name: 'Workflow name (optional)' },
   },
   skill: {
-    description: 'Read a skill: a guide for a kind of work, with files. With a name, a summary: what it is for, its sections and its files. With part, one section (by heading) or file (by path). Without a name, lists the skills for your role.',
+    description: 'Read a skill or a tool: a guide for a kind of work, with files, or a program teammates made, with how to use it. With a name, a summary: what it is for, its sections and its files. With part, one section (by heading) or file (by path). Without a name, lists the skills for your role and the tools in the library.',
     params: { name: 'Skill name (optional)', part: 'A section heading or a file path from the summary (optional)' },
   },
   canvas: {
     description: "Change the brainstorm room's board: cards (question, idea, finding, risk, decision, source, image, demo, text, concept), the links between them, and the frames that group them. Without ops, shows the whole board.",
     params: {
       ops: 'A list of changes: {"op": "add", "kind": "image", "title": "a few words", "text": "detail", "file": "room/media/x.png", "url": "https://…", "refs": ["src/x.ts:40"], "from": [{"id": "c2", "take": "its palette"}], "frame": "Look", "links": [{"to": "c2", "label": "answers"}], "ref": "a"}, {"op": "edit", "id": "c3", "title": "…", "file": "…", "pillars": [{"name": "Look", "text": "…", "cards": ["c3"]}]}, {"op": "settle" | "drop" | "reopen" | "remove", "id": "c3"}, {"op": "note", "id": "c3", "text": "…"}, {"op": "link", "from": "c4", "to": "c2", "label": "rules out"}, {"op": "unlink", "from": "c4", "to": "c2"}, {"op": "frame", "title": "Combat", "cards": ["c3", "c5"]}',
+    },
+  },
+  prototype: {
+    description: "The room's lead starts, forks or merges prototypes: playable games of their own, kept outside the project, each with its own builder and versions.",
+    params: {
+      action: 'start, fork or merge',
+      ideas: 'For start: [{"title": "a few words", "ask": "what to try", "card": "the card it comes from (optional)"}], one prototype each',
+      from: 'For start: game (a frozen copy of the game as it stands) or small (a little project of its own)',
+      source: 'For start from game: a checkout or git worktree of the project (optional; default the human\'s checkout)',
+      id: 'For fork: the prototype',
+      version: 'For fork: which version (optional; default its latest)',
+      ids: 'For merge: the prototypes, by id (or {"id": "…", "version": 3})',
+      title: 'For fork and merge: what to call the new one',
+      ask: 'For fork and merge: what to try',
     },
   },
 };
@@ -171,12 +186,15 @@ export class Hub {
         const from = str(pick(a, 'from', 'base', 'branch', 'start_from', 'starting_from'));
         const wt = pick(a, 'worktree', 'own_worktree', 'isolated', 'isolation');
         const worktree = wt === undefined ? undefined : truthy(wt) || /^worktree$/i.test(String(wt));
-        const r = d.spawnAgent(rec.goal, { role, brief, parent: rec.name, name, from, worktree });
+        const toolsArg = pick(a, 'tools', 'kit', 'tool');
+        const tools = (Array.isArray(toolsArg) ? toolsArg.map(String) : String(toolsArg ?? '').split(',')).map(t => t.trim()).filter(Boolean);
+        const r = d.spawnAgent(rec.goal, { role, brief, parent: rec.name, name, from, worktree, tools });
         if (!r.ok) return r.error;
         const guessed = r.guessedRole ? `(Took "${role}" to mean ${r.guessedRole}.) ` : '';
         const where = r.rec.worktree ? ` in its own worktree on branch ${r.rec.worktree.branch}, from ${r.rec.worktree.base.slice(0, 7)}` : ' in the shared folder';
         const backup = r.note ? ` ${r.note}` : '';
-        return `${guessed}Started ${r.name} (${r.rec.harness} · ${r.rec.model})${where}.${backup} Its result will reach you when it calls done; use wait to block until then.`;
+        const kit = r.rec.tools.length ? ` Its kit: ${r.rec.tools.join(', ')}.` : '';
+        return `${guessed}Started ${r.name} (${r.rec.harness} · ${r.rec.model})${where}.${kit}${backup} Its result will reach you when it calls done; use wait to block until then.`;
       }
 
       case 'respawn': {
@@ -252,22 +270,35 @@ export class Hub {
       case 'skill': {
         const want = str(pick(a, 'name', 'skill', 'text'));
         const part = str(pick(a, 'part', 'section', 'file', 'path', 'heading'));
-        const mine = d.skillsFor(rec);
-        if (!want) return skillList(mine);
-        const r = resolveName(want, mine.map(s => s.name));
+        let mine = d.skillsFor(rec);
+        if (!want) return skillList(mine, d.kitFor(rec));
+        let r = resolveName(want, mine.map(s => s.name));
+        // A tool the toolsmith wrote since the library was read.
+        if (!r.match || r.guessed) {
+          d.refreshTools(rec);
+          mine = d.skillsFor(rec);
+          r = resolveName(want, mine.map(s => s.name));
+        }
         if (!r.match) {
           const other = d.cfg(rec).skills.get(want);
-          const why = !other ? `There's no skill called "${want}".` : other.off ? `The skill ${want} is turned off.` : `Your role (${rec.role.name} on ${rec.harness}) doesn't carry the skill ${want}.`;
-          return `${why} ${skillList(mine)}`;
+          const why = !other ? `There's no skill called "${want}".`
+            : other.tool && !d.cfg(rec).settings.agentTools ? `Tools are turned off in the settings, so ${want} can't be used. Do the work without it.`
+            : other.off ? `The ${other.tool ? 'tool' : 'skill'} ${want} is turned off.`
+            : `Your role (${rec.role.name} on ${rec.harness}) doesn't carry the skill ${want}.`;
+          return `${why} ${skillList(mine, d.kitFor(rec))}`;
         }
         const sk = mine.find(s => s.name === r.match)!;
-        d.emit({ goal: rec.goal, agent: rec.name, type: 'skill.read', data: { skill: sk.name, ...(part ? { part } : {}) } });
+        if (sk.tool) d.toolRead(rec, sk.name);
+        d.emit({ goal: rec.goal, agent: rec.name, type: 'skill.read', data: { skill: sk.name, ...(part ? { part } : {}), ...(sk.tool ? { tool: true } : {}) } });
         const text = part ? skillPart(sk, part) : skillSummary(sk);
         return `${r.guessed ? `(Took "${want}" to mean ${sk.name}.)\n` : ''}${text}`;
       }
 
       case 'canvas':
         return d.canvasTool(rec, parseCanvasOps(a));
+
+      case 'prototype':
+        return d.prototypeTool(rec, a);
 
       case 'done': {
         const note = str(pick(a, 'note', 'summary', 'text', 'result', 'message', 'answer')) ?? (rec.lastText || '(no note)');
@@ -303,7 +334,13 @@ export class Hub {
     }
     const { roles, workflows } = this.d.rolesFor(rec, this.d.cfg(rec));
     lines.push('', workflows.length ? `Roles you can spawn (the ones ${workflows.join(' and ')} ${workflows.length > 1 ? 'use' : 'uses'}, and quick helpers):` : 'Roles you can spawn:');
-    for (const r of roles) lines.push(`- ${r.name}${r.helper ? ' (quick helper)' : ''}: ${r.goodAt || '—'}`);
+    for (const r of roles) lines.push(`- ${r.name}${r.helper ? ' (quick helper)' : ''}${r.onDemand ? ' (starts when messaged)' : ''}: ${r.goodAt || '—'}`);
+    // On-demand roles start when messaged, whatever the workflow names.
+    const onDemand = this.d.teamRoles(this.d.cfg(rec)).filter(r => r.onDemand && !roles.includes(r));
+    if (onDemand.length) {
+      lines.push('', 'Roles that start when you message them (send to: the role):');
+      for (const r of onDemand) lines.push(`- ${r.name}: ${r.goodAt || '—'}`);
+    }
     return lines.join('\n');
   }
 }

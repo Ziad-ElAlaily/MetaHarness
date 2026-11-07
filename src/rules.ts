@@ -11,8 +11,8 @@ import type { ToolRequest } from './adapters/types.ts';
  * delivers what comes out.
  */
 
-export type RuleWhen = 'start' | 'path' | 'new-file' | 'commit' | 'done' | 'away';
-export const RULE_WHENS: RuleWhen[] = ['start', 'path', 'new-file', 'commit', 'done', 'away'];
+export type RuleWhen = 'start' | 'path' | 'new-file' | 'commit' | 'done' | 'away' | 'prototype';
+export const RULE_WHENS: RuleWhen[] = ['start', 'path', 'new-file', 'commit', 'done', 'away', 'prototype'];
 
 export type ChangeKind = 'added' | 'modified' | 'deleted' | 'renamed';
 const CHANGE_KINDS: ChangeKind[] = ['added', 'modified', 'deleted', 'renamed'];
@@ -39,6 +39,8 @@ export interface Rule {
   requires?: string;
   /** Only while this repository file doesn't exist. */
   missing?: string;
+  /** Only while this setting is on, e.g. agentTools (a boolean in settings.json). */
+  setting?: string;
   /** Commit rules: the kinds of change that count. */
   changes: ChangeKind[];
   /** Commit rules: commits that also change this file don't count. */
@@ -73,6 +75,7 @@ export function parseRule(name: string, text: string, file: string): Rule {
     include: meta.include || undefined,
     requires: meta.requires || undefined,
     missing: meta.missing || undefined,
+    setting: meta.setting || undefined,
     changes: changes.length ? changes : CHANGE_KINDS,
     unlessChanged: meta.unless_changed || undefined,
     edited: truthy(meta.edited),
@@ -344,16 +347,18 @@ const TRIGGER: Record<Exclude<RuleWhen, 'start'>, string> = {
   commit: 'when you commit',
   done: 'when you call done',
   away: 'when the human goes away',
+  prototype: 'in a goal built from a prototype',
 };
 
 /**
  * The Rules part of an agent's prompt: the start rules in full (and the away rules, while the
- * human is away), and a line for each of the others so the agent knows their notes will come.
+ * human is away, and the prototype rules, in a goal built from a prototype), and a line for each
+ * of the others so the agent knows their notes will come.
  * Empty when no rule is for this agent.
  */
-export function rulesPrompt(rules: Iterable<Rule>, a: RuleAgent, cwd: string, away = false): string {
-  const mine = [...rules].filter(r => !r.off && appliesTo(r, a) && holds(r, cwd));
-  const start = mine.filter(r => r.when === 'start' || (away && r.when === 'away'));
+export function rulesPrompt(rules: Iterable<Rule>, a: RuleAgent, cwd: string, away = false, fromPrototype = false): string {
+  const mine = [...rules].filter(r => !r.off && appliesTo(r, a) && holds(r, cwd) && (r.when !== 'prototype' || fromPrototype));
+  const start = mine.filter(r => r.when === 'start' || (away && r.when === 'away') || r.when === 'prototype');
   const later = mine.filter(r => !start.includes(r));
   if (!start.length && !later.length) return '';
   const parts = ['## Rules'];

@@ -187,14 +187,14 @@ All of them accept loose input and answer in plain language.
 | Tool | What it does |
 |---|---|
 | `team()` | The roster: agents on this goal, their roles, what they're doing; plus roles you can spawn and what they're good at |
-| `spawn(role, brief, quick?, name?, worktree?, from?)` | Start a teammate. `brief` is free text. Returns their name. With `quick: true` it starts a helper, waits, and returns the helper's answer directly (§11). With `worktree: true` (or `from`) it gets its own worktree (§9) |
-| `send(to, text, urgent?, decision?)` | `to` = an agent name, a role, `lead`, `all`, or `human`. `all` and a role reach those still going, not teammates who have finished (§7). To the human with `decision: true`, it asks for an approval (§17) |
+| `spawn(role, brief, quick?, name?, worktree?, from?, tools?)` | Start a teammate. `brief` is free text. Returns their name. With `quick: true` it starts a helper, waits, and returns the helper's answer directly (§11). With `worktree: true` (or `from`) it gets its own worktree (§9). `tools` puts tools from the library in its kit (§24) |
+| `send(to, text, urgent?, decision?)` | `to` = an agent name, a role, `lead`, `all`, or `human`. `all` and a role reach those still going, not teammates who have finished (§7). To the human with `decision: true`, it asks for an approval (§17). To an on-demand role nobody has (the toolsmith), it starts one with the message as its task (§24) |
 | `dismiss(name)` | End a finished teammate for good, with the finished teammates it spawned. `name` can be several, or `all` for every finished teammate the caller spawned, leaving out roles woken by events. Only its spawner or the lead can, and only once it has finished and nothing under it still works: the reply says who it refused and why. Its files, commits and notes stay, and it can't be respawned. Not in a room, whose makers stay for the next question |
 | `wait(timeout?, on?, for?)` | Pause until a message arrives or one of your spawned agents finishes, then return what happened. `on` and `for` say who you expect something from and what (`for` alone: something of your own, like a build); a wait that would close a loop is refused (§8) |
 | `status(text)` | A one-line progress update, shown in the UI and in `team()` |
 | `done(note?)` | "I'm finished." The note goes to whoever spawned you. Your session stays resumable for follow-ups. Held while teammates you spawned still work (not quick helpers or woken roles): the reply names them and the agent decides — wait, message them, or carry on |
 | `workflow(name?)` | Read a workflow, e.g. the one the current one says to continue with; without a name, list them (§17) |
-| `skill(name?, part?)` | Read a skill: a summary (what it's for, its sections, its files), or with `part` one section or file; without a name, the skills for your role (§18) |
+| `skill(name?, part?)` | Read a skill or a tool: a summary (what it's for, its sections, its files), or with `part` one section or file; without a name, the skills for your role and the tools in the library (§18, §24) |
 
 Every tool result also says whether you have unread messages and which shared files changed
 since you last looked, so agents notice them naturally.
@@ -1231,6 +1231,7 @@ harness: codex              # optional: harness ids, !id to leave one out
 skill: pdf-forms            # optional: the note points at this skill (the body may be empty)
 sections: ARCHITECTURE.md   # attach the sections of this repo file whose heading is a path
 requires: ARCHITECTURE.md   # only when this file exists in the repo (missing: the opposite)
+setting: agentTools         # only while this boolean setting is on (settings.json)
                             # include: FILE adds a repo file's text after the body, when it exists
 ---
 This repository's map is ARCHITECTURE.md. The part for where you're working is below...
@@ -1268,7 +1269,8 @@ Rules load like roles: the built-in pack (`defaults/rules/` in MetaHarness), the
 replaces the one before it, and `off: true` in its front matter turns it off. Without writing a
 file, `rules: { "<name>": false }` in `settings.json` turns one off (and `true` turns one the
 personal folder turned off back on, for one repository). The **Rules** page lists every rule
-with where it comes from, a switch, and *Customize* to copy a built-in into a folder to edit.
+with where it comes from, a switch on each row (and in its editor), and *Customize* to copy a
+built-in into a folder to edit. A rule with `setting:` says so, and is marked while its setting is off.
 The assistant can propose a rule.
 
 ### The default pack: clean, mapped code
@@ -1349,9 +1351,10 @@ what is on the role, and when to remind is a rule. So a skill's own file only sa
 and what it works with.
 
 - **Where they come from**, least specific first: the built-in folder (`defaults/skills/`,
-  empty for now), the personal `~/.metaharness/skills/`, the repository's `.claude/skills/` and
-  `.agents/skills/` (so skills written for one harness reach all of them), then
-  `.metaharness/skills/`. The same name replaces the one before; `off: true` or
+  empty for now), the personal `~/.metaharness/skills/` (then the tools kept there,
+  `~/.metaharness/tools/`, §24), the repository's `.claude/skills/` and `.agents/skills/` (so
+  skills written for one harness reach all of them), then `.metaharness/skills/`, and the
+  project's tools, `.metaharness/tools/`, last. The same name replaces the one before; `off: true` or
   `settings.json` `skills: {name: false}` turns one off.
 - **Who carries one**: a role's `skills: pdf-forms, frontend`. A skill no role names goes to
   every role; once a role names it, only the roles that do. Imported skills work at once, and
@@ -1446,8 +1449,10 @@ mixes, and patches (the room's branch, Merge, the cartographer after it) were dr
 the same agents, sessions, events, costs and views (Graph, Sequence, Timeline, Costs, Files, Git,
 Design, Log). Its request is the topic. Everyone works in the human's checkout, reading; their
 own files go in the shared folder (`room/media/` for images, `room/demos/` for demos,
-`reports/`). It's one sitting: rooms aren't recovered after a daemon restart, but end then
-("New room from…" carries the board on).
+`reports/`). A room stays open until the human closes it: after a daemon restart it comes back
+with its chat, board and makers (2026-11-04; until then a room lasted one sitting). One that
+can't come back, its folder gone or its harness not here, ends, and "New room from…" carries the
+board on.
 
 - **The lead** is a role (Settings → Room lead, `roomLead`; built in: `room-lead` on Antigravity
   `gemini-3.8-flash-medium`, Claude Sonnet then Codex luna as backups). It's told the room's
@@ -1507,6 +1512,13 @@ own files go in the shared folder (`room/media/` for images, `room/demos/` for d
   room draws the sliders; **Keep these values** adds a decision card with the `values`, made
   from the demo. When the project has the real code, the prototyper ports its formulas, units
   and timestep and names the knobs after the real parameters, so the kept values carry back.
+- **Godot demos** are a small project in `room/demos/<name>/`, the card's `file` being its
+  `project.godot`. `room.godot` opens it on the daemon's machine (`MH_GODOT`, else `godot`):
+  `--import` headless first when any file is newer than its marker in `.godot/`, then the game
+  in a window; pressing again restarts, `stop` and the daemon closing end it. `room.godot`
+  events carry the state, the host and up to 20 distinct errors from its output, so a remote
+  client sees what happened. The room draws no sliders for these: the game has its own. `.godot/`
+  stays out of the shared folder's history and of what rooms and goals copy from each other.
 - **The concept card** holds the idea pillar by pillar, each pointing at its cards; the lead
   keeps it current.
 - **Asking the lead** (`room.post`): what the human says, optionally about a card (the lead gets
@@ -1521,6 +1533,72 @@ own files go in the shared folder (`room/media/` for images, `room/demos/` for d
   (a message asking the lead for `shared/room/design.md`, citing the cards), *→ Goal*
   (`fromRoom`: the goal's lead is pointed at the board, its concept, decisions and kept values,
   demos and images, the design and the chat), *New room from this*.
+
+### Prototypes
+
+Rooms are mostly used to polish a game: several independent ideas about one thing, each worth
+playing on its own, then together, before anything is built for real. A **prototype**
+(`src/prototypes.ts`, added 2026-11-04, brainstorm → "go") is a playable game of its own: one card
+on the board however many versions it goes through, with a builder and a folder of its own, and
+it outlasts the room.
+
+- **Where it lives:** `~/.metaharness/prototypes/<project id>/<id>/`: `prototype.json` (the record:
+  versions, kept values, verdict, start), `process.md` (each ask and answer, written by the
+  daemon), `repo/` (its own git repository, with no remote), and the room's chat and board copied
+  when the room closes or a goal starts from it. Nothing is ever written in the project, and it
+  stays until the human deletes it (Rooms list, with what it takes on disk), whatever happens to
+  the room.
+- **Where it starts** depends on the request; the lead picks and says why (the `room-lead` role's
+  text, editable), or the human does. `game`: a frozen copy of the human's checkout or any git
+  worktree of the project (`room.checkouts`): `git clone --local`, then what isn't committed there
+  (changes, new files; not what git ignores) as one more commit. It's a clone and not a worktree so
+  the project's `.git` gets no branches or metadata. It never moves after that. `small`: a little
+  project on its own. A plain demo stays what it was, for a quick sketch. Ideas started together
+  share one freeze, so they start from the same commit, and each has Godot's import cache
+  copied in (reflinked where the disk can) rather than importing a whole game again.
+- **The tools commit:** every new prototype gets `.prototype/` (`NOTES.md`, the tuning panel) and
+  the panel's autoload line in `project.godot`, as a commit of its own. `base` on the record is
+  the commit after it, carried through forks and merges, so what production is told changed
+  doesn't include them. (`override.cfg` would have spared the line in `project.godot`, but Godot
+  ignores it when importing, and the game's scripts then fail to parse: tried with 4.7.1.)
+- **Builders:** `room.prototype` or the lead's `prototype` tool makes a maker per prototype, from
+  the room's first demo maker, with the prototype's id as its name and `prototype` on its lens: its
+  own session, so ideas neither wait for each other nor blend. It works in `repo/` (`cwd`), may
+  change anything there, read the project and other prototypes, and gets no write to the project's
+  `.git` and no git guard. `sendMaker` starts it, and asks go straight to it (the lead hears of
+  them). The makers bar leaves these out: they're on their cards.
+- **Versions:** a builder's turn ending commits its folder (`commitAll`), a new version tagged
+  `v<n>`, and reopens the game if it's running and `rerun` is on. Builders are told not to run
+  git. `room.prototypeRestore` goes back to a version as a new one on top; `room.prototypeFork`
+  starts a new prototype from any version, sharing its history. `.prototype/NOTES.md` travels with
+  the version; `scene.txt` there says where Run opens it. Both merge by union.
+- **Tuning:** `defaults/godot/mh_tune.gd`, an autoload called `MhTune`. The game asks for a value
+  every frame with `MhTune.knob(name, min, max, default, label)`, declaring it in the code that uses
+  it, so a merge has no central list to conflict on. F10 shows the sliders; they save to
+  `.prototype/tuning.json` (not in git). **Keep these values** writes `kept.json`, which
+  `refreshPrototypes` takes on the next poll: a decision card with the values, and a record on the
+  prototype.
+- **Merging:** `room.prototypeMergePreview` asks git, changing no files (`mergedTree`).
+  `room.prototypeMerge` clones the first at its version, then merges the others in turn. A conflict
+  stops there and goes to the new prototype's builder, who edits the files with no git commands; when
+  its turn ends with no markers left, MetaHarness commits the merge and carries on. A prototype with
+  no history in common can't be git-merged: its builder is pointed at it to port what it proves.
+  Kept values from all of them come along.
+- **Verdict:** the human's alone: keep, park or drop, what it taught them, at which version. Keep
+  settles the card and drop drops it. **Start over** is a new prototype of the same idea from
+  another starting point, with this one dropped.
+- **Production:** `goal.start` with `prototype` (and `version`, default the verdict's, else the
+  latest) makes a goal of its own, independent of the room: the room goes on, and may be deleted
+  later. Its shared folder gets `imported/prototype/<id>/`: `changes.diff` (`base` to that version,
+  tools left out), `NOTES.md` at that version, `process.md` (with what it was forked or merged from),
+  `values.json`, and the room's chat and board. Its agents may read the prototype's folder and play
+  it (`prototypeFrom`, kept in `goal.started`, gives them the read root). Its lead's brief says how
+  far the project has moved since the freeze. `defaults/rules/prototype-handoff.md`, a rule with
+  `when: prototype` and so only in these goals, says to reimplement rather than copy: prototypes may
+  cut corners and production may not.
+- **Carrying over:** a new room from cards that hold a prototype takes it over (`p.room`), with a
+  fresh builder reading the folder and notes; the old room can no longer ask it. One builder at a
+  time per prototype.
 
 The UI's **Rooms** tab opens on the open room. Its **Room** tab has the **chat** (you and the
 lead; a line for each ask sent to a maker, the lead's or yours, and each answer) beside the
@@ -1696,6 +1774,106 @@ by that name stays where you filed it, overwritten or not.
 do swap updates often), switching a folder of roles and workflows on and off per project, nested
 folders, folders for rules, and rename-on-conflict, which would have to rewrite every reference to
 the renamed item.
+
+---
+
+## 24. Tools agents make
+
+Agents hit limits of their harness: they can't hear a sound they made, see a scene they built, or
+layer ten sound effects by hand without a program to do it. A team should be able to lift those
+limits itself, and keep what it makes for later tasks. So agents make **tools**: small programs
+with a `SKILL.md` on how to use them, kept in the project and reused. An architect in a tiered
+workflow can also have tools made up front, fitted to the teammates it's about to start.
+
+**A tool is a skill in a tools/ folder.** `.metaharness/tools/<name>/` in the project, and
+`~/.metaharness/tools/<name>/` once the human keeps it for every project. The skill loader reads
+both (`src/skills.ts`): the personal tools after the personal skills, the project's tools after
+everything else, so a project's copy of a tool wins while it's being changed. One library, one
+`skill` tool to read it on every harness, one export format. Being in `tools/` is what marks it,
+so the app can tell what agents made from what the human wrote. Its front matter adds where it
+came from and what it needs:
+
+```markdown
+---
+name: sfx-layer
+description: layers sound files into one, each with its own offset, gain, pitch and fade
+made_by: toolsmith-1
+asked_by: sound-1
+why: agents can't hear the result
+goal: 3f2a91c0
+needs: sox, python3       # programs it runs: mh doctor checks them, an import's review lists them
+uses: spectrogram         # tools or skills it calls: an export brings them along
+---
+```
+
+**The toolsmith** (`defaults/roles/toolsmith.md`, Opus with backups) makes and keeps them. Its text
+says how: look in the library first and extend rather than duplicate; arguments, not this task's
+paths; a worked example run before handing over; plain scripts any harness can run; no installing
+machine-wide; for what agents can't take in (sound, video, renderings), also an image, numbers or a
+report they can; an optional `ui/` page with a `settings.json` when a human would tune it. Tools
+lift limits on what agents can do or perceive, never the team's boundaries (the project, pushing,
+approvals, git's guard). It works in the checkout, never a worktree, so a tool is everyone's as
+soon as it's committed, and commits each tool alone (`git add .metaharness/tools/<name>`).
+
+**Started by a message.** A role with `on_demand: true` starts when a teammate sends to it and
+nobody on the team has it (or the one there was let go; a crashed one is the lead's to respawn).
+The hub spawns it in the checkout with the message as its task (who asked, the request, and to
+answer them with send), reporting to the lead, and logs `agent.spawned` with `onDemandBy`. The
+sender hears "toolsmith wasn't on the team, so MetaHarness started toolsmith-1 with your message
+as its task"; the lead gets a note with the request, which never wakes it. From then on there's one
+per goal: messages reach it like any teammate's. On-demand roles start whatever a workflow's
+`roles:` names, and `team()` lists them as roles that start when messaged.
+
+**Asking is a rule.** `defaults/rules/tools.md` (`when: start`, every team role but the toolsmith)
+tells agents the library exists and when to ask: working around something the harness can't do,
+unable to check their own output, or doing the same fiddly thing twice; say what's in the way, what
+goes in and out, and how you'd know it worked; carry on or wait, as suits the work. Changes go
+through the toolsmith too, so everyone using a tool stays in step. All of it is text the human can
+edit or turn off, like the rest of the default pack.
+
+**Who sees which tool.** Every agent may read every tool: `skillFor` lets tools through a role's
+claim, which for a skill would keep it to that role. What's limited is attention. An agent's
+**kit** is the tools its spawner named (`spawn(…, tools: ["sfx-layer"])`) and those its role's
+`skills:` names. Its prompt's *Tools* part spells the kit out with descriptions and names the rest
+of the library (up to 30) without them; `skill()` lists all of them, the kit first. Names in
+`tools:` forgive a typo, and the ones that don't exist come back in the spawn's reply with the
+library. The kit is in `agent.spawned` (`tools`), so a restart keeps it.
+
+**Changes reach their users.** A tool written since the library was read is found: `skill(name)`
+reads the skills again when it doesn't know a name (only skills, through `Project.reloadSkills`;
+roles and the rest still apply to agents started from then on). When a commit touches the tools
+folder (`toolsCommitted`, in the git poll), the library is read again and `tool.changed` {tool,
+sha, summary, new?, removed?} is logged. Agents whose kit holds the tool, or who have read it
+(`skill.read` carries `tool: true`), get "[MetaHarness] The tool sfx-layer was changed by
+toolsmith-1 (commit …). Read it again with skill("sfx-layer") before you next use it."; the lead
+hears of a new tool, with its description, to hand it to whoever needs it. These are notes: they
+join a running turn or wait for the next thing that reaches the agent.
+
+**Kept by the human.** Tools are committed with the project. *Tools & skills* lists them under
+*Made by agents*, apart from skills, with who made them, for whom and why, what they need (and
+what of it isn't installed), what they use, and how many agents have read them and when (from
+`skill.read` across goals). **Move to my library** (`tool.elevate`, client API only) copies the
+folder into `~/.metaharness/tools/`, replacing a personal one of that name, and removes the
+project's copy; when the repository tracks it, the removal is committed on its own (`git commit
+-- <path>`, so nothing else in the checkout comes along). Agents never write the personal library,
+which is outside the project: a toolsmith that improves a kept tool does it in a project copy,
+which wins in that project, and the page says it differs from the library's, with **Update your
+library with this version**.
+
+**A switch for all of it.** `agentTools: false` in settings.json (*Tools agents make* on the
+Settings page) is there for when it goes wrong. Agents don't see the library (`skillsFor` leaves
+tools out, so no *Tools* part, and `skill` says tools are off), `spawn`'s `tools` is ignored with a
+word in its reply, the role settings names as `toolsmith` can't be spawned or started by a message
+(the sender is told tools are off), tool commits send no notes, and the `tools` rule goes quiet
+through its `setting: agentTools`. A toolsmith already at work carries on until the human pauses or
+dismisses it. The tools themselves stay, listed on *Tools & skills* with a note that they're off.
+
+**Passing them on.** An export packs a tool as a skill marked `tool: true`, with the tools its
+`uses:` names, and an import puts it back in a `tools/` folder. The review says it's a tool agents
+made and which programs it expects on the machine, besides the programs it comes with.
+
+**Left for later.** The toolsmith's `ui/` pages shown in the app; tools as MCP servers the toolsmith
+writes, for long-running processes or structured results; usage counted from runs, not reads.
 
 ## Appendix A. Harness capabilities (checked 2026-10-17, Antigravity 2026-10-18)
 

@@ -11,6 +11,7 @@ const WHEN: { id: RuleWhen; label: string; hint: string }[] = [
   { id: 'commit', label: 'Committing', hint: 'When a commit of the agent’s (not a merge) changes matching files.' },
   { id: 'done', label: 'Calling done', hint: 'The first done comes back with this text; the next one goes through.' },
   { id: 'away', label: 'You go away', hint: 'When you say you’re away, to the agents at work then; in the prompt of those that start while you are.' },
+  { id: 'prototype', label: 'Built from a prototype', hint: 'In the prompt of every agent in a goal started from a prototype.' },
 ];
 const CHANGES: ChangeKind[] = ['added', 'modified', 'deleted', 'renamed'];
 
@@ -56,6 +57,9 @@ export function Rules({ config, selected, onSelect, onSave, onCommand }: SetupPr
     if (next) onSelect(keyOf(draft));
   };
   const toggle = (on: boolean) => current && void onSave({ cmd: 'settings.save', scope: switchScope, patch: { rules: { [current.name]: on } } });
+  /** The switch on a rule in the list, saved where its switch already is (else this project's settings). */
+  const quickToggle = (r: RuleDef) => void onSave({ cmd: 'settings.save', scope: r.switchedBy ?? (config?.scopes.some(s => s.scope === 'repo') ? 'repo' : 'personal'), patch: { rules: { [r.name]: !r.on } } });
+  const settingOff = (r: RuleDef) => !!r.setting && (config?.settings.effective as unknown as Record<string, unknown> | undefined)?.[r.setting] === false;
 
   return (
     <SetupLayout
@@ -89,7 +93,23 @@ export function Rules({ config, selected, onSelect, onSave, onCommand }: SetupPr
                     on={!isNew && current ? keyOf(current) === keyOf(r) : false}
                     title={r.name}
                     scope={r.scope}
-                    extra={!r.on && <span className="tag muted">off</span>}
+                    extra={
+                      <>
+                        {!r.on && <span className="tag muted">off</span>}
+                        {r.on && settingOff(r) && <span className="tag muted" title={`Quiet while ${r.setting} is off in Settings`}>{r.setting} off</span>}
+                        <span
+                          role="switch"
+                          aria-checked={r.on}
+                          aria-label={`${r.on ? 'Turn off' : 'Turn on'} ${r.name}`}
+                          title={r.on ? 'On: click to turn it off' : 'Off: click to turn it on'}
+                          className={`mini-switch${r.on ? ' on' : ''}`}
+                          onClick={e => {
+                            e.stopPropagation();
+                            quickToggle(r);
+                          }}
+                        />
+                      </>
+                    }
                     onClick={() => void go(keyOf(r))}
                     sub={r.description && <span className="clamp-2">{r.description}</span>}
                   />
@@ -119,6 +139,7 @@ export function Rules({ config, selected, onSelect, onSave, onCommand }: SetupPr
                     label={current.on ? 'Agents get this rule' : 'Off: agents don’t get it'}
                     hint={`Saved in ${switchScope === 'repo' ? 'this project’s' : 'your personal'} settings.json${current.fileOff ? '. Its file also says off: true.' : '.'}`}
                   />
+                  {current.setting && <div className="hint">Only while <span className="mono">{current.setting}</span> is on in Settings{settingOff(current) ? ': it’s off now, so agents don’t get this rule' : ''}.</div>}
                 </Section>
               )}
               <Section title="What it's for">

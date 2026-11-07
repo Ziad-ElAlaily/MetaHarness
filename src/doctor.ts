@@ -35,7 +35,14 @@ export function checkRoute(harness: string, model: string, reports: Map<string, 
 
 const mark = (ok: boolean | undefined) => (ok === true ? '✓' : ok === false ? '✗' : '?');
 
-export function doctorLines(reports: HarnessReport[], roles: Role[], mcpDefs: Map<string, unknown> = new Map()): string[] {
+/** Tools (design §24) as doctor reads them: what each needs, and what of that isn't installed here. */
+export interface ToolCheck {
+  name: string;
+  needs: string[];
+  missing: string[];
+}
+
+export function doctorLines(reports: HarnessReport[], roles: Role[], mcpDefs: Map<string, unknown> = new Map(), tools: ToolCheck[] = []): string[] {
   const byId = new Map(reports.map(r => [r.id, r]));
   const lines = ['Harnesses on this machine', ''];
   const found = reports.filter(r => r.path);
@@ -73,6 +80,14 @@ export function doctorLines(reports: HarnessReport[], roles: Role[], mcpDefs: Ma
         const where = mcpDefs.has(name) ? 'mcp.json' : runsOn?.mcpNames.includes(name) ? `${runsOn.title}'s own config` : undefined;
         lines.push(`${' '.repeat(head.length)} ${where ? '✓' : '✗'} mcp ${name.padEnd(40)} ${where ? `from ${where}` : `not configured here: add it to ~/.metaharness/mcp.json, or to ${runsOn?.title ?? 'the harness'}`}`);
       }
+    }
+  }
+  const needing = tools.filter(t => t.needs.length);
+  if (needing.length) {
+    lines.push('', 'Tools agents made', '');
+    for (const t of needing) {
+      const ok = !t.missing.length;
+      lines.push(`  ${mark(ok)} ${t.name.padEnd(24)} needs ${t.needs.join(', ')}${ok ? '' : ` · not installed here: ${t.missing.join(', ')}`}`);
     }
   }
   return lines;

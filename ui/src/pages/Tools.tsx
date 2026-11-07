@@ -57,6 +57,8 @@ function toDef(d: Draft): McpDef {
 export function Tools({ config, selected, onSelect, onSave, onCommand }: SetupProps) {
   const servers = useMemo(() => config?.mcp ?? [], [config]);
   const skills = config?.skills ?? [];
+  const guides = skills.filter(k => !k.tool);
+  const made = skills.filter(k => k.tool);
   const isNew = selected === 'new';
   const skill = skills.find(k => skillKey(k) === selected) ?? (!selected && !servers.length ? skills[0] : undefined);
   const current = servers.find(s => keyOf(s) === selected) ?? (isNew || skill ? undefined : servers[0]);
@@ -85,7 +87,7 @@ export function Tools({ config, selected, onSelect, onSave, onCommand }: SetupPr
       title="Tools & skills"
       intro={
         <>
-          What roles carry besides MetaHarness’s own tools. <b>MCP servers</b>, such as Blender or a browser: a role names them under <i>Tools</i>, and a name that isn’t defined here is looked up in the harness’s own settings. <b>Skills</b>, guides with files that agents read when they decide they need one: folders with a <span className="mono">SKILL.md</span> in <span className="mono">.metaharness/skills</span>, <span className="mono">~/.metaharness/skills</span>, or the repository’s <span className="mono">.claude/skills</span> and <span className="mono">.agents/skills</span>. A role names the skills it carries under <i>Skills</i>; one no role names goes to every role.
+          What roles carry besides MetaHarness’s own tools. <b>MCP servers</b>, such as Blender or a browser: a role names them under <i>Tools</i>, and a name that isn’t defined here is looked up in the harness’s own settings. <b>Skills</b>, guides with files that agents read when they decide they need one: folders with a <span className="mono">SKILL.md</span> in <span className="mono">.metaharness/skills</span>, <span className="mono">~/.metaharness/skills</span>, or the repository’s <span className="mono">.claude/skills</span> and <span className="mono">.agents/skills</span>. A role names the skills it carries under <i>Skills</i>; one no role names goes to every role. <b>Made by agents</b>: tools a toolsmith wrote when a teammate asked, in <span className="mono">.metaharness/tools</span>, which every agent can read; move one to your library to use it in every project.
         </>
       }
       action={
@@ -111,10 +113,16 @@ export function Tools({ config, selected, onSelect, onSave, onCommand }: SetupPr
           ))}
           {!servers.length && <div className="empty">No servers defined. Roles can still name servers their harness already has.</div>}
           <div className="list-group">Skills</div>
-          {skills.map(k => (
+          {guides.map(k => (
             <SkillItem key={skillKey(k)} skill={k} on={skill ? skillKey(skill) === skillKey(k) : false} onClick={() => void go(skillKey(k))} />
           ))}
-          {!skills.length && <div className="empty">No skills yet. Add a folder with a SKILL.md to one of the skills folders.</div>}
+          {!guides.length && <div className="empty">No skills yet. Add a folder with a SKILL.md to one of the skills folders.</div>}
+          <div className="list-group">Made by agents</div>
+          {config?.settings.effective.agentTools === false && <div className="hint">Turned off in Settings: agents don’t see these, and no toolsmith starts.</div>}
+          {made.map(k => (
+            <SkillItem key={skillKey(k)} skill={k} on={skill ? skillKey(skill) === skillKey(k) : false} onClick={() => void go(skillKey(k))} />
+          ))}
+          {!made.length && <div className="empty">No tools yet. Agents ask the toolsmith for one when something is in their way; it lands in this project’s .metaharness/tools.</div>}
         </>
       }
       editor={

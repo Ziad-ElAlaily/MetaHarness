@@ -1,7 +1,7 @@
 # Tracker
 
 Where MetaHarness stands against the plan in [DESIGN.md §19](DESIGN.md). Update this file when a
-step lands. Last updated 2026-11-03.
+step lands. Last updated 2026-11-07.
 
 ## Milestone 0: a small team works ✅
 
@@ -636,6 +636,24 @@ Findings from the run:
   scripted agents only: not yet run on a real harness, so whether agents actually use `dismiss`
   unprompted is unknown.
 
+- [x] **Godot demos open from a room's board** (2026-11-04, DESIGN.md §21). A demo card whose file
+  is a `project.godot` gets **▶ Run in Godot**: a window on the daemon's machine, imported first
+  when files changed, with Restart, Stop and script errors on the card. The prototyper makes these
+  in Godot projects, with sliders inside the game. Web export was considered and left out. Checked
+  with tests, with the real Godot 4.7.1 opening and closing a window through a scripted daemon, and
+  the button in headless Chrome (against a stand-in Godot). Not yet tried with a real prototyper.
+- [x] **Parallel prototypes in a room** (2026-11-04, DESIGN.md §21). Ideas become prototypes kept
+  outside the project (`src/prototypes.ts`): one card each, with a builder of their own and git
+  versions; started from a freeze of a checkout or worktree (uncommitted work included), or a small
+  project; fork, go back, merge with a dry run first, a verdict, and a goal of its own that reads and
+  plays it (`defaults/rules/prototype-handoff.md`). A tuning panel inside the game
+  (`defaults/godot/mh_tune.gd`, F10) with Keep. Rooms now come back after a restart until closed.
+  Checked with tests against real git; the panel drawn by the real Godot 4.7.1 under Xvfb and its
+  `keep()` run in it; a frozen copy opened through Run with the real engine, headless; the whole flow
+  in headless Chrome against a scripted daemon. Not yet tried: real builders on a real harness
+  (whether each lets a builder write in its prototype folder while the project stays read-only), a
+  large game (the first import, the disk), Run opening a real window, and the sliders and Keep button
+  by hand.
 - [x] **Files in a message** (DESIGN.md §14, GUIDE.md §6). Attach by picker, drop or paste in an
   agent's conversation, Message the team, a room's chat, the assistant and Inbox answers. The file
   goes in the shared folder on sending, and the message names it, so nothing changes per harness. A
@@ -656,6 +674,19 @@ Findings from the run:
   tried: a file sent to another real machine, or the Share button, which needs https and a browser
   that can share files.
 
+- [x] **Tools agents make** (DESIGN.md §24, GUIDE.md §8, brainstorm → "go" on 2026-11-07). Tools
+  are skills in `.metaharness/tools/` (personal: `~/.metaharness/tools/`), with where they came
+  from and what they need in their front matter. A built-in **toolsmith** role (Opus) starts on
+  the first message sent to it (`on_demand: true`, usable by any role), works in the checkout and
+  commits each tool alone; a default rule (`tools`) says when to ask. Every agent may read every
+  tool; `spawn(…, tools:)` and a role's `skills:` make an agent's kit, spelled out in its prompt.
+  A commit to a tool tells the agents who carry or read it, and the lead hears of new ones. The
+  Tools & skills page lists them apart, with usage and **Move to my library**; exports bring the
+  tools a tool uses and land them in `tools/`; `mh doctor` lists missing programs. Tested with
+  scripted agents and real git. Not yet tried: a real toolsmith on a real harness, the page by
+  hand. A Settings switch (`agentTools`) turns all of it off; rules got a `setting:` key, and a
+  switch on each row of the Rules list.
+
 ## Milestone 3: improve
 
 - [ ] Role×model stats, retrospectives (totalling the Design view's findings and reports across goals),
@@ -675,7 +706,7 @@ Findings from the run:
 ## Resuming work
 
 ```sh
-npm install && npm test        # 222 tests, about half a minute, no model calls
+npm install && npm test        # 237 tests, about half a minute, no model calls
 node src/cli.ts doctor         # what's installed and signed in here
 node src/cli.ts daemon --fake  # try it without spending anything
 ```

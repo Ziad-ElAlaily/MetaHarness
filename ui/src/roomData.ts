@@ -1,4 +1,4 @@
-import type { BoardFrame, CanvasCard, CanvasLink, CardKind, Knob, Lens, MhEvent, Output } from './types.ts';
+import type { BoardFrame, CanvasCard, CanvasLink, CardKind, Knob, Lens, MhEvent, Output, PrototypeInfo } from './types.ts';
 
 /** A room, folded from its events (src/daemon.ts, design §21): everything the room view shows. */
 
@@ -33,10 +33,21 @@ export interface RoomView {
   from?: string;
   /** Lines naming what the room was opened with. */
   attachments?: string[];
+  /** Godot demos opened from their cards, by file. */
+  godot: Record<string, GodotRun>;
+  /** The prototypes on the board. */
+  prototypes: PrototypeInfo[];
+}
+
+export interface GodotRun {
+  state: 'importing' | 'running' | 'stopped';
+  host?: string;
+  errors: string[];
+  problem?: string;
 }
 
 export function roomOf(events: MhEvent[]): RoomView {
-  const v: RoomView = { lenses: [], cards: [], links: [], frames: [], seen: new Map(), messages: [] };
+  const v: RoomView = { lenses: [], cards: [], links: [], frames: [], seen: new Map(), messages: [], godot: {}, prototypes: [] };
   for (const e of events) {
     const d = e.data as Record<string, unknown>;
     switch (e.type) {
@@ -46,6 +57,12 @@ export function roomOf(events: MhEvent[]): RoomView {
         break;
       case 'room.lenses':
         v.lenses = (d.lenses as Lens[]) ?? [];
+        break;
+      case 'room.prototypes':
+        v.prototypes = (d.prototypes as PrototypeInfo[]) ?? [];
+        break;
+      case 'room.godot':
+        v.godot[String(d.file)] = { state: d.state as GodotRun['state'], host: d.host as string | undefined, errors: (d.errors as string[]) ?? [], problem: d.problem as string | undefined };
         break;
       case 'room.canvas': {
         const cards = (d.cards as CanvasCard[]) ?? [];
@@ -96,6 +113,7 @@ export const CARD_KINDS: { kind: CardKind; label: string; icon: string; hint: st
   { kind: 'risk', label: 'Risk', icon: '!', hint: 'What could go wrong' },
   { kind: 'decision', label: 'Decision', icon: '✓', hint: 'What you settled' },
   { kind: 'concept', label: 'Concept', icon: '◆', hint: 'The idea as it stands, pillar by pillar' },
+  { kind: 'prototype', label: 'Prototype', icon: '▶', hint: 'A game of its own, to play and change' },
 ];
 export const kindOf = (k: CardKind) => CARD_KINDS.find(x => x.kind === k) ?? CARD_KINDS[0];
 

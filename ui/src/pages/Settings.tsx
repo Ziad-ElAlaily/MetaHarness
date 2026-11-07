@@ -26,7 +26,7 @@ export function Settings({ config, ...p }: Props) {
 function SettingsForm({ config, onSave, onBuiltinRole }: Props & { config: ConfigView }) {
   const eff = config.settings.effective;
   const [scope, setScope] = useState<Scope>(config.scopes.some(s => s.scope === 'repo') ? 'repo' : 'personal');
-  const saved = useMemo<Draft>(() => ({ approvals: eff.approvals, gatekeeper: eff.gatekeeper, assistant: eff.assistant, roomLead: eff.roomLead, cacheReminders: eff.cacheReminders, cacheRemindSec: eff.cacheRemindSec, cacheRemindMinTokens: eff.cacheRemindMinTokens, defaultCacheMinutes: eff.defaultCacheMinutes, limitCheckMinutes: eff.limitCheckMinutes, contextHandoffPct: eff.contextHandoffPct, stallMinutes: eff.stallMinutes }), [eff]);
+  const saved = useMemo<Draft>(() => ({ approvals: eff.approvals, gatekeeper: eff.gatekeeper, assistant: eff.assistant, roomLead: eff.roomLead, cacheReminders: eff.cacheReminders, cacheRemindSec: eff.cacheRemindSec, cacheRemindMinTokens: eff.cacheRemindMinTokens, defaultCacheMinutes: eff.defaultCacheMinutes, limitCheckMinutes: eff.limitCheckMinutes, contextHandoffPct: eff.contextHandoffPct, stallMinutes: eff.stallMinutes, agentTools: eff.agentTools }), [eff]);
   const { draft, set, dirty, revert } = useDraft<Draft>(saved);
   const [busy, setBusy] = useState(false);
   const from = (k: keyof Draft) => [...config.settings.files].reverse().find(f => f.values[k] !== undefined)?.scope;
@@ -107,6 +107,15 @@ function SettingsForm({ config, onSave, onBuiltinRole }: Props & { config: Confi
                 builtIn="Built in: Antigravity gemini-3.8-flash-medium, with Claude sonnet and Codex gpt-6-luna backups."
                 onChange={v => set('roomLead', v)}
                 onEdit={exists => onBuiltinRole('roomLead', scope, exists)}
+              />
+            </Section>
+
+            <Section title="Tools agents make" hint={where('agentTools')}>
+              <Toggle
+                checked={draft.agentTools}
+                onChange={v => set('agentTools', v)}
+                label={draft.agentTools ? 'Agents make and use tools' : 'Off: no tools'}
+                hint="On: agents ask the toolsmith for tools when something is in their way, and use the ones in the library. Off: agents don’t see the library, the toolsmith isn’t started (one already at work carries on until you pause or dismiss it), and the tools rule goes quiet. The tools stay on Tools & skills."
               />
             </Section>
 
