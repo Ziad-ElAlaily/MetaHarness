@@ -52,6 +52,8 @@ export interface AgentReplay {
   contextPct?: number;
   /** While rate limited: when it was due to continue, in ms since the epoch. */
   limitedUntil?: number;
+  /** Its role's own route, while it runs on a backup because that route's account was at its limit. */
+  home?: { harness: string; model: string; effort?: string };
   /** Messages sent to it that it never received. */
   undelivered: PendingMessage[];
   /** The tools its spawner gave it, and those it has read (design §24). */
@@ -139,6 +141,7 @@ export function replayGoal(events: MhEvent[]): GoalReplay | undefined {
           cwd: str(x.cwd) || g.dir, worktree: wt,
           startedFrom: str(x.startedFrom) || undefined, state: 'starting', status: '', lastText: '', undelivered: [],
           ...(Array.isArray(x.tools) ? { tools: x.tools.map(String) } : {}),
+          ...(routeOf(x.home) ? { home: routeOf(x.home) } : {}),
         });
         if (!g.lead && led && (e.parent ?? 'human') === 'human') g.lead = e.agent!;
         if (wt) g.refs.set(wt.branch, wt.base);
@@ -166,6 +169,7 @@ export function replayGoal(events: MhEvent[]): GoalReplay | undefined {
         a.harness = to?.harness ?? a.harness;
         a.model = to?.model ?? a.model;
         a.effort = to?.effort;
+        a.home = x.back === true ? undefined : (routeOf(x.home) ?? a.home);
         // The new harness can't resume the old one's session.
         a.nativeSession = undefined;
         break;
@@ -275,3 +279,9 @@ export function goalOver(g: GoalReplay): boolean {
 
 /** Agents that were in the middle of something when the daemon stopped. */
 export const INTERRUPTED: AgentState[] = ['starting', 'working', 'waiting'];
+
+/** A route as an event keeps it, or undefined. */
+function routeOf(v: unknown): { harness: string; model: string; effort?: string } | undefined {
+  const r = v as { harness?: unknown; model?: unknown; effort?: unknown } | undefined;
+  return r && typeof r.harness === 'string' && typeof r.model === 'string' ? { harness: r.harness, model: r.model, ...(typeof r.effort === 'string' ? { effort: r.effort } : {}) } : undefined;
+}

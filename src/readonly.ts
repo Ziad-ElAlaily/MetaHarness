@@ -21,6 +21,8 @@ const PLAIN = new Set([
   'diff', 'cmp', 'comm', 'file', 'stat', 'du', 'df', 'which', 'type', 'basename', 'dirname', 'realpath', 'readlink', 'date',
   'true', 'false', 'test', '[', '[[', 'nl', 'column', 'od', 'hexdump', 'md5sum', 'sha1sum', 'sha256sum', 'sha512sum', 'printenv',
   'read', 'cd', 'sleep', 'jq', 'seq', 'rev', 'tac', 'fold', 'paste', 'join', 'strings', 'whoami', 'id', 'uname',
+  // The machine's state: which processes run, and which hold a file or a lock.
+  'ps', 'pgrep', 'pidof', 'lslocks', 'lsof', 'uptime', 'free', 'nproc',
 ]);
 
 /** Variables that change what later commands run. */
@@ -297,6 +299,22 @@ function simple(words: string[], depth: number): Verdict {
     }
     case 'git':
       return gitReadOnly(args);
+    case 'fuser':
+      // Lists who has a file open; -k kills them, and so does naming a signal.
+      return args.some(a => /^-[a-zA-Z]*k|^--kill|^-[A-Z]+$|^-\d+$|^-SIG/.test(a)) ? no('fuser that kills') : YES;
+    case 'flock': {
+      // `flock -n <file> <read-only command>`: tests whether a lock is free without waiting or keeping it.
+      let i = 0;
+      let nonblocking = false;
+      while (i < args.length && args[i].startsWith('-')) {
+        const a = args[i++];
+        if (a === '--nonblock' || /^-[xs]*n[xs]*$/.test(a)) nonblocking = true;
+        else if (!['-x', '-s', '--exclusive', '--shared'].includes(a)) return no(`flock ${a}`);
+      }
+      const rest = args.slice(i + 1);
+      if (!nonblocking || i >= args.length || !rest.length) return no('flock that waits for or keeps a lock');
+      return simple(rest, depth);
+    }
     default:
       return no(`${cmd} isn't known to be read-only`);
   }

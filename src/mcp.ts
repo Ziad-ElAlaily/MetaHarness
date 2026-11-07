@@ -25,6 +25,7 @@ const SCHEMAS: Record<(typeof TOOL_NAMES)[number], z.ZodType> = {
   done: z.looseObject({ note: z.string().optional() }),
   workflow: z.looseObject({ name: z.string().optional() }),
   skill: z.looseObject({ name: z.string().optional(), part: z.string().optional() }),
+  procs: z.looseObject({ end: z.union([z.string(), z.number(), z.array(z.union([z.string(), z.number()]))]).optional() }),
   canvas: z.looseObject({ ops: z.union([z.array(z.looseObject({})), z.string()]).optional() }),
   prototype: z.looseObject({ action: z.string().optional() }),
 };

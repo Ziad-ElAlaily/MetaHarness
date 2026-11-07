@@ -5,7 +5,7 @@ import { parseCanvasOps } from './rooms.ts';
 import type { AgentRec, Daemon, InboxEntry } from './daemon.ts';
 
 /** `canvas` and `prototype` are published only to agents in a brainstorm room, and `dismiss` only outside one. */
-export const TOOL_NAMES = ['team', 'spawn', 'respawn', 'dismiss', 'send', 'wait', 'status', 'done', 'workflow', 'skill', 'canvas', 'prototype'] as const;
+export const TOOL_NAMES = ['team', 'spawn', 'respawn', 'dismiss', 'send', 'wait', 'status', 'done', 'workflow', 'skill', 'procs', 'canvas', 'prototype'] as const;
 
 /** Descriptions the MCP layer will publish. Written for the agents that read them. */
 export const TOOL_DOCS: Record<(typeof TOOL_NAMES)[number], { description: string; params: Record<string, string> }> = {
@@ -56,6 +56,11 @@ export const TOOL_DOCS: Record<(typeof TOOL_NAMES)[number], { description: strin
     },
   },
   status: { description: 'Post a one-line progress update for the human and your teammates.', params: { text: 'What you are doing now' } },
+  procs: {
+    description:
+      "See what the team's commands are still running: each process's PID, whose command started it, how long it has run and what it is. Use it when something is stuck waiting, e.g. on a lock or a port, to find what holds it. With end, stop processes: your own, or, as the lead or their spawner, a teammate's. A command of yours that is cut short (interrupted, timed out) has what it left running ended for you.",
+    params: { end: 'Optional: PIDs to stop, separated by commas, or mine for every process your commands left running' },
+  },
   done: { description: "Say you're finished. The note goes to whoever spawned you. Held while teammates you spawned still work: their results first.", params: { note: 'What you did and where it is' } },
   workflow: {
     description: 'Read a workflow: a guide for running a kind of task, e.g. the next one a workflow says to continue with. Without a name, lists them.',
@@ -206,6 +211,15 @@ export class Hub {
         const wanted = (Array.isArray(who) ? who.map(String) : String(who ?? '').split(/[,\s]+/)).map(w => w.trim()).filter(Boolean);
         if (!wanted.length) return 'dismiss needs a name: a finished teammate, several separated by commas, or all.';
         return d.dismissAgents(rec.goal, rec.name, wanted);
+      }
+
+      case 'procs': {
+        const raw = pick(a, 'end', 'kill', 'stop', 'pids', 'pid');
+        if (raw === undefined || raw === '' || raw === false) return d.teamProcs(rec.goal, rec.name);
+        if (/^\s*(mine|all|yes|true)\s*$/i.test(String(raw)) || raw === true) return d.teamProcs(rec.goal, rec.name, 'mine');
+        const pids = (Array.isArray(raw) ? raw : String(raw).split(/[,\s]+/)).map(Number).filter(n => Number.isInteger(n) && n > 0);
+        if (!pids.length) return 'procs end needs PIDs (from procs without end), or mine.';
+        return d.teamProcs(rec.goal, rec.name, pids);
       }
 
       case 'send': {

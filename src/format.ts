@@ -74,7 +74,7 @@ export function eventLine(e: MhEvent): string {
     case 'goal.cleaned':
       return `${t}  ${'goal'.padEnd(15)}cleaned${d.force ? ' (forced)' : ''}: ${d.removed.length} worktree(s) removed, ${d.deleted.length} branch(es) deleted${d.kept.length ? `, ${d.kept.length} kept` : ''}`;
     case 'procs.ended':
-      return `${t}  ${who}ended ${d.procs.length} process(es) ${d.reason === 'left by the last daemon' ? 'the last daemon left running' : 'left running'}: ${oneLine(d.procs.map((p: { command: string }) => p.command.split(' ')[0].split('/').pop()).join(', '), 100)}`;
+      return `${t}  ${who}ended ${d.procs.length} process(es) ${d.reason === 'left by the last daemon' ? 'the last daemon left running' : d.reason === 'its command was cut short' ? 'a cut-short command left running' : 'left running'}: ${oneLine(d.procs.map((p: { command: string }) => p.command.split(' ')[0].split('/').pop()).join(', '), 100)}`;
     case 'approval.refused':
       return `${t}  ${who}refused: ${oneLine(d.detail, 80)} (${oneLine(d.why, 80)})`;
     case 'approval.auto':
@@ -99,7 +99,7 @@ export function eventLine(e: MhEvent): string {
     case 'goal.stalled':
       return `${t}  ${'goal'.padEnd(15)}⚠ stuck waiting: ${(d.agents as { name: string; minutes: number; why?: string }[]).map(a => `${a.name} (${a.minutes} min${a.why ? `, ${a.why}` : ''})`).join('; ')}; told ${d.told === 'human' ? 'you' : 'the lead'}`;
     case 'agent.moved':
-      return `${t}  ${who}moved from ${d.from.harness} · ${d.from.model} to ${d.to.harness} · ${d.to.model}: ${oneLine(d.reason)}`;
+      return `${t}  ${who}moved ${d.back ? 'back ' : ''}from ${d.from.harness} · ${d.from.model} to ${d.to.harness} · ${d.to.model}: ${oneLine(d.reason)}`;
     case 'agent.limited':
       return `${t}  ${who}rate limited on ${d.account}; continues at ${String(d.until).slice(11, 16)} UTC${d.known ? '' : ' (reset time unknown, will retry)'}`;
     case 'agent.interrupted':

@@ -33,6 +33,8 @@ export interface GatekeeperHost {
   /** Where its usage goes (session totals, as adapters report them). */
   usage(u: Parameters<SessionEvents['usage']>[0], session: number): void;
   log(type: string, data: Record<string, unknown>): void;
+  /** What its harness says about the account it runs on, so a fresh session picks a backup. */
+  rateLimit?(info: Parameters<SessionEvents['rateLimit']>[0]): void;
 }
 
 export interface GatekeeperLimits {
@@ -56,6 +58,8 @@ export function parseVerdict(text: string): Judgement | undefined {
 interface Pending {
   req: GatekeeperRequest;
   resolve: (j: Judgement) => void;
+  /** Sent again on a fresh session once, after its first one hit the account's limit. */
+  retried?: boolean;
 }
 
 export class Gatekeeper {
@@ -120,6 +124,8 @@ export class Gatekeeper {
     this.starting = this.open(text);
     await this.starting;
     this.starting = undefined;
+    // A session that hit its limit while starting put its request back in the queue.
+    void this.next();
   }
 
   private async open(brief: string): Promise<Session | undefined> {
@@ -157,7 +163,12 @@ export class Gatekeeper {
       turnStarted: () => {},
       turnEnded: () => {
         if (!live() || !this.current) return;
-        this.finish(parseVerdict(this.lastText) ?? { verdict: 'ask', reason: `the gatekeeper's answer had no verdict: ${this.lastText.slice(0, 200) || '(nothing)'}` });
+        const j = parseVerdict(this.lastText);
+        if (j) return this.finish(j);
+        // A turn that failed (an error, a limit) may still answer later, and that answer would be
+        // read as the next request's verdict: the next request gets a fresh session.
+        this.retire();
+        this.finish({ verdict: 'ask', reason: `the gatekeeper's answer had no verdict: ${this.lastText.slice(0, 200) || '(nothing)'}` });
       },
       text: t => {
         if (live()) this.lastText = t;
@@ -176,12 +187,29 @@ export class Gatekeeper {
         this.finish({ verdict: 'ask', reason: `the gatekeeper's session ended${detail ? ` (${detail.slice(0, 200)})` : ''}` });
       },
       rateLimit: info => {
-        if (live() && info.status === 'limited') this.finish({ verdict: 'ask', reason: "the gatekeeper's account is at its limit" });
+        this.host.rateLimit?.(info);
+        if (live() && info.status === 'limited') this.limited();
       },
       approval: async () => ({ allow: false, message: 'The gatekeeper only reads. Answer ALLOW, DENY or ASK.' }),
       decide: async t => Gatekeeper.decide(t),
       pull: () => undefined,
     };
+  }
+
+  /**
+   * The session's account is at its limit. The session goes (what it still says belongs to no
+   * request), and the request is sent once more on a fresh one, which runs on a backup if the
+   * role has one that isn't limited too.
+   */
+  private limited(): void {
+    this.retire();
+    const c = this.current;
+    if (!c) return;
+    if (c.retried) return this.finish({ verdict: 'ask', reason: "the gatekeeper's account is at its limit, and so is its backup's" });
+    clearTimeout(c.timer);
+    this.current = undefined;
+    this.queue.unshift({ req: c.req, resolve: c.resolve, retried: true });
+    void this.next();
   }
 
   private timedOut(): void {

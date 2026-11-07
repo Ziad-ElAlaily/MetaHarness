@@ -131,6 +131,23 @@ export interface Tagged {
   goal: string;
   agent: string;
   command: string;
+  /** Its parent's PID, where the system says (Linux). */
+  ppid?: number;
+  /** When it started, in ms since the epoch, where the system says (Linux). */
+  startedAt?: number;
+}
+
+/**
+ * The ones an agent's commands started, without its harness: the CLI the daemon runs and what
+ * that runs itself (MCP servers, Codex's per-command sandbox) carry the tag too, and ending them
+ * would end the agent. Shells, what they run and whatever detached stay.
+ */
+export function commandsOnly(found: Tagged[], daemonPid = process.pid): Tagged[] {
+  const up = parents();
+  return found.filter(p => {
+    const parent = p.ppid ?? up.get(p.pid);
+    return parent !== daemonPid && (parent === undefined || up.get(parent) !== daemonPid);
+  });
 }
 
 /**
@@ -167,6 +184,37 @@ export function endTagged(found: Tagged[]): void {
   }, 2000).unref();
 }
 
+/**
+ * The machine's boot time in ms since the epoch, which /proc's start times count from: this
+ * process's own start, less its start in ticks (finer than /proc/stat's btime, whole seconds).
+ */
+let bootMs: number | undefined;
+function bootTime(): number | undefined {
+  if (bootMs === undefined) {
+    try {
+      const stat = readFileSync('/proc/self/stat', 'utf8');
+      const ticks = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]);
+      if (Number.isFinite(ticks)) bootMs = performance.timeOrigin - ticks * 10;
+    } catch {
+      // No /proc: no start times.
+    }
+  }
+  return bootMs;
+}
+
+/** A process's parent and start time from /proc/<pid>/stat (start in clock ticks after boot; Linux's are 100 a second). */
+function procStat(pid: string): { ppid?: number; startedAt?: number } {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    // The command name is in parentheses and may hold spaces: the fields come after its last ')'.
+    const f = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    const boot = bootTime();
+    return { ppid: Number(f[1]), ...(boot !== undefined ? { startedAt: boot + Number(f[19]) * 10 } : {}) };
+  } catch {
+    return {};
+  }
+}
+
 function fromProc(): Tagged[] {
   const out: Tagged[] = [];
   let pids: string[];
@@ -191,7 +239,7 @@ function fromProc(): Tagged[] {
     } catch {
       // Gone since.
     }
-    out.push({ pid: Number(pid), goal: vars.get('MH_GOAL') ?? '', agent: vars.get('MH_AGENT') ?? '', command: command.slice(0, 200) });
+    out.push({ pid: Number(pid), goal: vars.get('MH_GOAL') ?? '', agent: vars.get('MH_AGENT') ?? '', command: command.slice(0, 200), ...procStat(pid) });
   }
   return out;
 }

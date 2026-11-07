@@ -32,7 +32,9 @@ Call \`team\` to see who's on it. Put long things in the shared folder and keep 
 Ask the person who knows (\`send\`) instead of guessing. Post a \`status\` line when you start
 something new. When you \`wait\` for a teammate, say who (\`on\`) and what for (\`for\`).
 When finished, call \`done\` with a short note on what you did and where it is.
-When a teammate you spawned has finished and you won't need it again, \`dismiss\` it.`;
+When a teammate you spawned has finished and you won't need it again, \`dismiss\` it.
+Runs that mustn't overlap with a teammate's (a test suite) hold this project's own lock:
+\`flock -w 1800 "$MH_PROJECT_LOCK" <command>\`. If something waits on it too long, \`procs\` shows what holds it.`;
 
 const DEFAULT_HELPER_METHODOLOGY = `You're a quick helper for another AI agent. Answer the brief and nothing more.
 Keep it short, then call \`done\` with the answer as the note.`;

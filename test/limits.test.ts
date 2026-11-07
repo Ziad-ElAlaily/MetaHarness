@@ -221,3 +221,96 @@ test('an urgent message interrupts: natively, or by restarting the session from 
   }
   assert.equal(seen[0], '[interrupted]', 'the native interrupt reaches the running turn');
 });
+
+/** A team whose implementer starts on `fake`, hits its limit there and moves to `backup`; returns what the test needs to free `fake` again. */
+function awayTeam(backupScript: FakeScript, homeAgain: (brief: string) => Promise<void> = async () => {}) {
+  let homeSessions = 0;
+  const primary = new FakeAdapter({
+    architect: async ctx => void (await ctx.nextMessage(10_000)),
+    implementer: async ctx => {
+      homeSessions++;
+      if (homeSessions === 1) {
+        ctx.rateLimit({ status: 'limited', resetsAt: Date.now() + 2 * HOUR, usedPct: 100 });
+        await ctx.sleep(50);
+        return;
+      }
+      await homeAgain(ctx.spec.brief);
+    },
+  });
+  const backup = new FakeAdapter({ implementer: backupScript }, { harness: 'backup' });
+  const d = makeTeam({
+    roles: { architect: role('other', 'm'), implementer: role('fake', 'sol', 'backup/flash') },
+    adapters: { fake: primary, backup, other: new FakeAdapter({ architect: async ctx => void (await ctx.nextMessage(10_000)) }, { harness: 'other' }) },
+    pause: { tickMs: 20 },
+    contextNotesMs: 2000,
+  });
+  // The fake harness reads its limits like a real one: free again once the test says so.
+  let free = false;
+  (primary as { readLimits?: () => Promise<Record<string, RateLimitInfo>> }).readLimits = async () => ({ fake: free ? { status: 'ok', usedPct: 2, resetsAt: Date.now() + 5 * HOUR } : { status: 'limited', usedPct: 100, resetsAt: Date.now() + 2 * HOUR } });
+  const goal = d.startGoal({ request: 'r' });
+  const spawned = d.spawnAgent(goal, { role: 'implementer', brief: 'Build part A.', parent: 'architect' });
+  assert.ok(spawned.ok);
+  return { d, goal, rec: spawned.rec, homeSessions: () => homeSessions, freeHome: async () => ((free = true), await d.checkLimits('fake', true)) };
+}
+
+const until = async (ok: () => boolean, what: string, ms = 3000) => {
+  const end = Date.now() + ms;
+  while (!ok() && Date.now() < end) await settle();
+  assert.ok(ok(), what);
+};
+
+test('an agent on a backup goes home once its own account frees: between turns, with its next message', async () => {
+  let homeBrief = '';
+  const t = awayTeam(async ctx => ctx.say('On the backup, waiting for news.'), async brief => void (homeBrief = brief));
+  const { d, goal, rec } = t;
+  await until(() => rec.harness === 'backup', 'moved to the backup');
+  assert.deepEqual(rec.home, { harness: 'fake', model: 'sol' });
+  await until(() => !rec.session?.busy(), 'its backup turn ended');
+
+  await t.freeHome();
+  assert.equal(rec.harness, 'backup', 'no turn is spent on the switch: it waits for a message');
+  d.deliver(goal, 'architect', rec.name, 'Part B too, please.');
+  await until(() => rec.harness === 'fake' && t.homeSessions() === 2, 'home again');
+  assert.match(homeBrief, /Part B too, please/, 'the message is in the handoff');
+  assert.equal(rec.home, undefined);
+  const moves = d.store.since(goal).filter(e => e.type === 'agent.moved' && e.agent === rec.name);
+  assert.deepEqual(moves.map(e => [(e.data.to as { harness: string }).harness, e.data.back ?? false]), [['backup', false], ['fake', true]]);
+  assert.match(String(moves[1].data.reason), /fake account is free again/);
+  await d.close();
+});
+
+test('an agent mid-turn on a backup writes its notes, then goes home at the next step', async () => {
+  let notice = '';
+  let homeBrief = '';
+  const t = awayTeam(
+    async ctx => {
+      notice = (await ctx.nextMessage(5000)) ?? '';
+      ctx.writeShared(`notes/${ctx.spec.agent}.md`, 'Parser done; tests next.\n');
+      while (!ctx.stopped()) await ctx.sleep(20);
+    },
+    async brief => void (homeBrief = brief),
+  );
+  const { d, goal, rec } = t;
+  await until(() => rec.harness === 'backup' && !!rec.session?.busy(), 'working on the backup');
+  await t.freeHome();
+  await until(() => rec.harness === 'fake' && t.homeSessions() === 2, 'home again');
+  assert.match(notice, /fake account has reset.*role's own fake · sol.*shared\/notes\/implementer-1\.md/s);
+  assert.match(homeBrief, /handoff|notes/i);
+  await d.close();
+});
+
+test("a limited home keeps an agent away, and a restart remembers its home", async () => {
+  const t = awayTeam(async ctx => ctx.say('On the backup.'));
+  const { d, goal, rec } = t;
+  await until(() => rec.harness === 'backup' && !rec.session?.busy(), 'on the backup, between turns');
+  // Still limited: it answers where it is.
+  await d.checkLimits('fake', true);
+  d.deliver(goal, 'architect', rec.name, 'Still there?');
+  await until(() => !rec.session?.busy() && !rec.inbox.length, 'answered on the backup');
+  assert.equal(rec.harness, 'backup');
+  assert.deepEqual(rec.home, { harness: 'fake', model: 'sol' });
+  // Replayed from the log, it still knows where home is.
+  const { replayGoal } = await import('../src/recover.ts');
+  assert.deepEqual(replayGoal(d.store.since(goal))!.agents.get(rec.name)!.home, { harness: 'fake', model: 'sol' });
+  await d.close();
+});

@@ -160,3 +160,15 @@ test('settings: each folder keeps its own settings.json; the repository wins, ke
   assert.deepEqual(JSON.parse(readFileSync(join(repo, 'settings.json'), 'utf8')), {});
   await d.close();
 });
+
+test('config: a personal role that names one project is saved with a note that every project gets it', async () => {
+  const { d } = setup();
+  const name = d.project().dir.split('/').pop()!;
+  const r = (await d.command({ cmd: 'role.save', scope: 'personal', name: 'worker', harness: 'fake', instructions: `Run tests under \`flock -w 1800 /var/lock/${name}-suite.lock tools/test.sh\`.` })) as any;
+  assert.match(r.warning, new RegExp(`applies to every project, and it names "${name}".*MH_PROJECT_LOCK`));
+  assert.match(r.result, /Note: it's personal/);
+  const ok = (await d.command({ cmd: 'role.save', scope: 'personal', name: 'tester', harness: 'fake', instructions: 'Run tests under `flock -w 1800 "$MH_PROJECT_LOCK" <test command>`.' })) as any;
+  assert.equal(ok.warning, undefined);
+  const repo = (await d.command({ cmd: 'role.save', scope: 'repo', name: 'local', harness: 'fake', instructions: `flock /tmp/${name}-suite.lock` })) as any;
+  assert.equal(repo.warning, undefined, "in the project's own folder it's fine");
+});
