@@ -112,7 +112,6 @@ export function elideHeredocs(script: string): string {
     } else if (c === '\n' && pending.length) {
       out += '\n';
       i++;
-      start = i;
       for (const h of pending) {
         const body: string[] = [];
         for (;;) {
@@ -129,6 +128,8 @@ export function elideHeredocs(script: string): string {
         }
       }
       pending = [];
+      // The next command starts after the last end line, not where the bodies began.
+      start = i;
     } else {
       if (c === '\n') start = i + 1;
       out += c;

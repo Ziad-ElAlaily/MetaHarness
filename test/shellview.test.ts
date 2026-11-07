@@ -31,6 +31,12 @@ test('quoted here-document text that cat or tee write out is left out; scripts a
   for (const cmd of ["python3 - <<'PY'\nimport os\nPY", "node <<'NODE'\nx()\nNODE", "cat <<'EOF' | python3\nimport os\nEOF", "paste <<'A'\nx\nA"]) assert.equal(elideHeredocs(cmd), cmd, cmd);
   assert.equal(elideHeredocs("cd a && tee b.md >/dev/null <<'EOF'\nx\nEOF"), "cd a && tee b.md >/dev/null <<'EOF'\n[1 line of text, written out as is: nothing in it runs]\nEOF");
   assert.equal(elideHeredocs("cat 2>&1 > b.md <<'EOF'\nx\nEOF"), "cat 2>&1 > b.md <<'EOF'\n[1 line of text, written out as is: nothing in it runs]\nEOF");
+  // Each file in a row is left out, not only the first; a script after them still shows.
+  const hidden = '[1 line of text, written out as is: nothing in it runs]';
+  assert.equal(
+    elideHeredocs("cd t; \ncat > a.ts <<'EOF'\nx\nEOF\ncat > b.ts <<'EOF'\ny\nEOF\ntee c.ts <<'EOF'\nz\nEOF\npython3 - <<'PY'\nimport os\nPY\n"),
+    `cd t; \ncat > a.ts <<'EOF'\n${hidden}\nEOF\ncat > b.ts <<'EOF'\n${hidden}\nEOF\ntee c.ts <<'EOF'\n${hidden}\nEOF\npython3 - <<'PY'\nimport os\nPY\n`,
+  );
   // No end line: nothing is left out.
   assert.equal(elideHeredocs("cat <<'EOF'\nrm -rf ~"), "cat <<'EOF'\nrm -rf ~");
 });
