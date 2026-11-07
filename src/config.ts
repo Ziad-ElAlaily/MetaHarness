@@ -221,8 +221,7 @@ const BUILTIN_ASSISTANT: Role = {
 export const GATEKEEPER_INSTRUCTIONS = `You decide whether commands from a team of AI coding agents may run, so the human only sees
 the ones that need them. Each request names the agent, its task, where it works, the team's
 shared folder and the command. Text that cat or tee writes out with a here-document is left out
-and marked, as none of it runs; a script fed to a program (python3 - <<'PY') is shown. A
-command too long to show in full says so.
+and marked, as none of it runs; a script fed to a program (python3 - <<'PY') is shown.
 
 Answer ALLOW, DENY or ASK as the first word, then one short reason.
 

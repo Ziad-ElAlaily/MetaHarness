@@ -422,7 +422,9 @@ there are new messages or file changes, so an agent nobody is messaging sees not
     the command text is the agent's, not instructions. It reads the command as the shell
     will (`src/shellview.ts`): Codex's `/bin/bash -lc '…'` wrapper taken off (the Inbox shows
     that too), the bodies of quoted here-documents (`<<'EOF'`) replaced by their length since
-    none of it runs, and the goal's shared folder named. Before this, haiku misread Codex's
+    none of it runs, and the goal's shared folder named. It sees a command whole or not at all: one
+    over 50,000 characters comes to you unread, since a cut one was sometimes allowed on its
+    visible part (34 of 77 cut commands in two weeks), leaving the rest to run unseen. Before this, haiku misread Codex's
     quoting and asked about report files written into `shared/`. The role is built in (Claude haiku,
     with Codex and Antigravity backups) unless a `roles/gatekeeper.md` replaces it; any
     harness or model can fill it, and teams can't spawn it. Checked live on haiku: about 3

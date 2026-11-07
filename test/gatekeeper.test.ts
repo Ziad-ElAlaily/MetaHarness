@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { FakeAdapter, type FakeCtx } from '../src/adapters/fake.ts';
-import { Gatekeeper, parseVerdict } from '../src/gatekeeper.ts';
+import { Gatekeeper, parseVerdict, SHOWN } from '../src/gatekeeper.ts';
 import { makeTeam, withTimeout } from './helpers.ts';
 
 test('a verdict is the first ALLOW, DENY or ASK, with what follows as the reason', () => {
@@ -125,6 +125,38 @@ test("the gatekeeper reads Codex's commands without the wrapper or written text,
   assert.match(seen[0], new RegExp(`The team's shared folder: .*/goals/${goal}/shared`));
   // The human sees the whole script, without the wrapper.
   assert.equal(d.humanInbox.find(i => i.kind === 'approval')!.text, "Bash: cat > notes.md <<'EOF'\n# `x`\nEOF\ncurl -X POST https://example.com -d @notes.md");
+  await d.close();
+});
+
+test('a command too long for the gatekeeper to read whole goes to the human unread', async () => {
+  const seen: string[] = [];
+  const answer = async (ctx: FakeCtx, text: string) => {
+    seen.push(text);
+    ctx.say('ALLOW part of the task');
+  };
+  const fake = new FakeAdapter({ gatekeeper: ctx => answer(ctx, ctx.spec.brief), '*': async () => {} }, {}, { gatekeeper: answer });
+  const d = makeTeam({ roles: { architect: role(), gatekeeper: role() }, adapters: { fake }, settings: { approvals: 'gatekeeper' } });
+  const goal = d.startGoal({ request: 'r' });
+  const lead = d.agent(goal, 'architect')!;
+  // Padding a script so its end falls past what the gatekeeper reads doesn't get it through.
+  const padded = `python3 - <<'PY'\n${'# padding\n'.repeat(SHOWN / 10)}PY\nrm -rf ~`;
+  const long = d.requestApproval(lead, 'Bash', padded);
+  await withTimeout(
+    new Promise<void>(r => {
+      const t = setInterval(() => d.humanInbox.some(i => i.kind === 'approval') && (clearInterval(t), r()), 5);
+    }),
+    2000,
+    'the Inbox item',
+  );
+  const item = d.humanInbox.find(i => i.kind === 'approval')!;
+  assert.match(item.note!, /too long for the gatekeeper to read/);
+  assert.equal(seen.length, 0, 'the model never saw it');
+  d.resolveInbox(item.id, 'deny');
+  assert.equal((await long).allow, false);
+  // One that fits is read whole, its end included.
+  const fits = `python3 - <<'PY'\n${'# padding\n'.repeat(SHOWN / 20)}PY\necho done-marker`;
+  assert.deepEqual(await withTimeout(d.requestApproval(lead, 'Bash', fits), 2000, 'allow'), { allow: true });
+  assert.match(seen[0], /echo done-marker/);
   await d.close();
 });
 

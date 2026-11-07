@@ -89,6 +89,8 @@ export class Gatekeeper {
     const known = this.remembered.get(key(req));
     if (known) return Promise.resolve({ ...known, remembered: true });
     if (this.stopped) return Promise.resolve({ verdict: 'ask', reason: 'the gatekeeper has stopped' });
+    // Never judged on part of it: what isn't shown would run unseen.
+    if (req.detail.length > SHOWN) return Promise.resolve({ verdict: 'ask', reason: `the command is too long for the gatekeeper to read (${req.detail.length.toLocaleString('en')} characters, over ${SHOWN.toLocaleString('en')})` });
     return new Promise(resolve => {
       this.queue.push({ req, resolve });
       void this.next();
@@ -236,15 +238,14 @@ export class Gatekeeper {
       ...(first && r.brief ? [`Its task: ${r.brief.replace(/\s+/g, ' ').slice(0, 800)}`] : []),
       `It wants to run ${r.tool}:`,
       '```',
-      r.detail.slice(0, SHOWN),
-      ...(r.detail.length > SHOWN ? [`[… ${r.detail.length - SHOWN} more characters not shown]`] : []),
+      r.detail,
       '```',
       'Answer ALLOW, DENY or ASK as the first word, then one short reason.',
     ].join('\n');
   }
 }
 
-/** How much of a command the gatekeeper is shown. */
-const SHOWN = 6000;
+/** The longest command the gatekeeper reads, whole; a longer one goes to the human unread. */
+export const SHOWN = 50_000;
 
 const key = (r: GatekeeperRequest) => `${r.agent}\n${r.tool}\n${r.detail}`;
